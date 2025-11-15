@@ -19,13 +19,12 @@ This module contains helper functions for data processing, visualization,
 and file operations.
 """
 
-import gc
+ 
 import json
 import os
 import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-from depth_anything_3.utils.memory import cleanup_cuda_memory
 import numpy as np
  
 
@@ -186,15 +185,9 @@ def get_scene_info(examples_dir: str) -> List[Dict[str, Any]]:
     return scenes
 
 
-def cleanup_memory() -> None:
-    """Clean up GPU memory and garbage collect using shared utils.
-
-    This delegates to the centralized CUDA cleanup so Gradio and backend
-    behave consistently when releasing memory.
-    """
-    gc.collect()
-    # Use canonical helper from shared memory utils
-    cleanup_cuda_memory()
+# NOTE: cleanup was moved to a single canonical helper in
+# `depth_anything_3.utils.memory.cleanup_cuda_memory`.
+# Callers should import and call that directly instead of using this module.
 
 
 def get_logo_base64() -> Optional[str]:
