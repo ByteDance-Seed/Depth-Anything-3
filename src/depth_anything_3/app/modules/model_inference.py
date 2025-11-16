@@ -19,7 +19,6 @@ This module handles all model-related operations including inference,
 data processing, and result preparation.
 """
 
- 
 import glob
 import os
 from typing import Any, Dict, Optional, Tuple
