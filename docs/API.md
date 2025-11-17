@@ -27,7 +27,7 @@ Here are quick examples to get you started:
 
 ### 🚀 Basic Depth Estimation
 ```python
-from depth_anything_3 import DepthAnything3
+from depth_anything_3.api import DepthAnything3
 
 # Initialize and run inference
 model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE").to("cuda")
@@ -382,7 +382,7 @@ The `inference()` method returns a `Prediction` object with the following attrib
 
 ### 📷 Camera Parameters
 
-- **extrinsics**: `np.ndarray` - Camera extrinsic matrices with shape `(N, 4, 4)` representing world-to-camera transformations. Only present if camera poses were estimated or provided as input.
+- **extrinsics**: `np.ndarray` - Camera extrinsic matrices with shape `(N, 3, 4)` representing world-to-camera transformations. Only present if camera poses were estimated or provided as input.
 - **intrinsics**: `np.ndarray` - Camera intrinsic matrices with shape `(N, 3, 3)` containing focal length and principal point information. Only present if poses were estimated or provided as input.
 
 ### 🎁 Additional Outputs
