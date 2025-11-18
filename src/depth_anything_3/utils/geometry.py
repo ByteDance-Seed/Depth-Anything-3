@@ -71,7 +71,7 @@ def transpose_last_two_axes(arr):
     return arr.transpose(axes)
 
 
-def affine_inverse_np(A: np.array):
+def affine_inverse_np(A: np.ndarray):
     R = A[..., :3, :3]
     T = A[..., :3, 3:]
     P = A[..., 3:, :]

@@ -86,7 +86,7 @@ class GaussianAdapter(nn.Module):
         else:
             gs_depths = depths
         # 1.2) align predicted poses with GT if needed
-        if gt_extrinsics is not None and extrinsics != gt_extrinsics:
+        if gt_extrinsics is not None and not torch.equal(extrinsics, gt_extrinsics):
             try:
                 _, _, pose_scales = batch_align_poses_umeyama(
                     gt_extrinsics.detach().float(),
@@ -97,8 +97,8 @@ class GaussianAdapter(nn.Module):
             pose_scales = torch.clamp(pose_scales, min=1 / 3.0, max=3.0)
             cam2worlds[:, :, :3, 3] = cam2worlds[:, :, :3, 3] * rearrange(
                 pose_scales, "b -> b () ()"
-            )
-            gs_depths = gs_depths * rearrange(pose_scales, "b -> b () () () ()")
+            ) # [b, i, j]
+            gs_depths = gs_depths * rearrange(pose_scales, "b -> b () () ()") # [b, v, h, w]
         # 1.3) casting xy in image space
         xy_ray, _ = sample_image_grid((H, W), device)
         xy_ray = xy_ray[None, None, ...].expand(b, v, -1, -1, -1)  # b v h w xy
