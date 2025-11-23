@@ -19,6 +19,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from ..optimized_attention import scaled_dot_product_attention_optimized
+
 
 class Attention(nn.Module):
     def __init__(
@@ -54,12 +56,14 @@ class Attention(nn.Module):
         q, k = self.q_norm(q), self.k_norm(k)
         q = self.rope(q, pos) if self.rope is not None else q
         k = self.rope(k, pos) if self.rope is not None else k
-        x = F.scaled_dot_product_attention(
+        # Use optimized attention (auto-selects backend based on device)
+        x = scaled_dot_product_attention_optimized(
             q,
             k,
             v,
             dropout_p=self.attn_drop.p if self.training else 0.0,
             attn_mask=attn_mask,
+            training=self.training,
         )
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)

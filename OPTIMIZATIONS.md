@@ -144,12 +144,10 @@ with torch.autocast(device_type=device.type, dtype=autocast_dtype):
 - Minimal accuracy impact
 
 **Note MPS (Apple Silicon):**
-
-- Par défaut désormais : fp32 (autocast désactivé) pour la stabilité.
-- Opt-in fp16 : passer `mixed_precision=True` ou `mixed_precision="float16"` pour activer l’autocast MPS.
-- `mixed_precision="bfloat16"` retombe automatiquement en fp16 (bf16 non supporté par PyTorch MPS).
-
-**Rule of thumb:** If inference runs without errors/NaN, FP16 is faster. FP32 is the safety net.
+- Autocast is fp16-only; bf16 is not reliably supported by PyTorch MPS and will raise errors.
+- fp16 = meilleur compromis perf/mémoire ; fp32 = mode sûr si un op échoue en fp16.
+- Si `mixed_precision="bfloat16"` est demandé sur MPS, le code bascule automatiquement en fp16.
+- Flag de secours: `force_fp32_on_mps=True` désactive l’autocast sur MPS si un op casse en fp16.
 
 ### 5. Optimized Attention for MPS
 

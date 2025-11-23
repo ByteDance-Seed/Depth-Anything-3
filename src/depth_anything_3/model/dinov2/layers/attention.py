@@ -9,8 +9,11 @@
 #   https://github.com/rwightman/pytorch-image-models/tree/master/timm/models/vision_transformer.py
 
 import logging
+import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+
+from ...optimized_attention import scaled_dot_product_attention_optimized
 
 logger = logging.getLogger("dinov2")
 
@@ -34,7 +37,6 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = head_dim**-0.5
-        self.fused_attn = fused_attn
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.q_norm = norm_layer(head_dim) if qk_norm else nn.Identity()
@@ -56,24 +58,22 @@ class Attention(nn.Module):
         if self.rope is not None and pos is not None:
             q = self.rope(q, pos)
             k = self.rope(k, pos)
-        if self.fused_attn:
-            x = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                dropout_p=self.attn_drop.p if self.training else 0.0,
-                attn_mask=(
-                    (attn_mask)[:, None].repeat(1, self.num_heads, 1, 1)
-                    if attn_mask is not None
-                    else None
-                ),
-            )
-        else:
-            q = q * self.scale
-            attn = q @ k.transpose(-2, -1)
-            attn = attn.softmax(dim=-1)
-            attn = self.attn_drop(attn)
-            x = attn @ v
+
+        # Expand attention mask if provided
+        expanded_attn_mask = None
+        if attn_mask is not None:
+            expanded_attn_mask = attn_mask[:, None].repeat(1, self.num_heads, 1, 1)
+
+        # Use optimized attention (auto-selects backend based on device)
+        x = scaled_dot_product_attention_optimized(
+            q,
+            k,
+            v,
+            attn_mask=expanded_attn_mask,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+            scale=self.scale,
+            training=self.training,
+        )
 
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
