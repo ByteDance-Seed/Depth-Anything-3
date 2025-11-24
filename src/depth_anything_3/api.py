@@ -336,8 +336,8 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             return prediction
         prediction.intrinsics = intrinsics.numpy()
         _, _, scale, aligned_extrinsics = align_poses_umeyama(
-            prediction.extrinsics,
             extrinsics.numpy(),
+            prediction.extrinsics,
             ransac=len(extrinsics) >= ransac_view_thresh,
             return_aligned=True,
             random_state=42,
