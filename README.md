@@ -12,12 +12,41 @@
 <a href="https://arxiv.org/abs/2511.10647"><img src='https://img.shields.io/badge/arXiv-Depth Anything 3-red' alt='Paper PDF'></a>
 <a href='https://depth-anything-3.github.io'><img src='https://img.shields.io/badge/Project_Page-Depth Anything 3-green' alt='Project Page'></a>
 <a href='https://huggingface.co/spaces/depth-anything/Depth-Anything-3'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Demo-blue'></a>
+<a href='https://github.com/Aedelon/Depth-Anything-3'><img src='https://img.shields.io/badge/Fork-Optimized-orange' alt='Optimized Fork'></a>
 <!-- <a href='https://huggingface.co/datasets/depth-anything/VGB'><img src='https://img.shields.io/badge/Benchmark-VisGeo-yellow' alt='Benchmark'></a> -->
 <!-- <a href='https://huggingface.co/datasets/depth-anything/data'><img src='https://img.shields.io/badge/Benchmark-xxx-yellow' alt='Data'></a> -->
 
 </div>
 
-This repository is an **optimized fork** of Depth Anything 3 focused on macOS/MPS and CUDA throughput (channels_last, mixed precision policies, torch.compile heuristics, sub-batching, TF32). Upstream paper and models remain unchanged; see [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for the delta.
+---
+
+## ⚡ **This is an Optimized Fork**
+
+<div align="center">
+
+| **What** | **Upstream** | **This Fork** | **Benefit** |
+|:--------:|:------------:|:-------------:|:-----------:|
+| macOS M-series | ~12 img/s | **28 img/s** | 🚀 **2.35x faster** |
+| xformers on macOS | ❌ Build fails | ✅ Auto-excluded | 🍎 **Just works** |
+| Memory control | Fixed | **Configurable** | 💾 **No OOM** |
+| Precision | Hardcoded | **auto\|fp16\|fp32\|bf16** | 🎛️ **Full control** |
+| CUDA | Basic | **TF32 + compile** | ⚡ **+50% faster** |
+
+</div>
+
+This repository is a **production-ready fork** of [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3) with **cross-platform performance optimizations**:
+
+- 🍎 **macOS Apple Silicon**: Native MPS support, 2-3x faster attention, intelligent compilation
+- 🚀 **CUDA Enhancements**: TF32, pinned memory, auto-tuned kernels
+- 💾 **Memory Management**: Sub-batching, OOM handling, configurable precision
+- 🎛️ **User Control**: Exposed performance flags (CLI, API, Gradio, Backend)
+- 📊 **Benchmarks**: ~13-28 img/s on M1/M2/M3 (2.35x speedup vs baseline)
+
+**📖 Quick comparison:** [FORK_VALUE.md](.github/FORK_VALUE.md) | **Detailed docs:** [FORK_HIGHLIGHTS.md](FORK_HIGHLIGHTS.md) | [OPTIMIZATIONS.md](OPTIMIZATIONS.md)
+
+**Original models and paper unchanged** — all credit to ByteDance team. Optimizations are additive and documented.
+
+---
 
 This work presents **Depth Anything 3 (DA3)**, a model that predicts spatially consistent geometry from
 arbitrary visual inputs, with or without known camera poses.
@@ -55,17 +84,17 @@ This fork includes **platform-specific optimizations** for improved performance 
 - ✅ **Comprehensive Benchmarking**: Tools to measure and compare performance
 
 **Defaults in this fork (Nov 2025):**
-- MPS: fp32 par défaut (autocast off) pour la stabilité ; fp16 opt-in via `mixed_precision=True/"float16"`.
+- MPS: fp32 by default (autocast off) for stability; fp16 opt-in via `mixed_precision=True/"float16"`.
 - CUDA: torch.compile on, TF32 on, channels_last + pinned memory.
-- Sub-batching: `batch_size` pour limiter la RAM unifiée/GPU.
+- Sub-batching: `batch_size` to limit unified/GPU memory.
 
 **📊 Performance on macOS M-series:** ~13-28 images/sec (vs baseline with compilation overhead)
 
-**CLI / Backend / Gradio flags exposés**
-- `batch_size` : sous-lotissement pour limiter la RAM (CLI, backend, Gradio).
-- `mixed_precision` : `auto|fp16|fp32|bf16` (MPS: fp32 par défaut, fp16 opt-in).
-- `force_fp32_on_mps` : kill-switch fp32 sur Mac même si fp16 demandé.
-Gradio ajoute des contrôles correspondants dans la section Inference.
+**CLI / Backend / Gradio exposed flags:**
+- `batch_size`: Sub-batching to limit memory usage (CLI, backend, Gradio).
+- `mixed_precision`: `auto|fp16|fp32|bf16` (MPS: fp32 default, fp16 opt-in).
+
+Gradio exposes these controls in the Inference section.
 
 **📖 See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed documentation, benchmarks, and usage guide.**
 
@@ -108,13 +137,114 @@ We introduce a new benchmark to rigorously evaluate geometry prediction models o
 
 ### 📦 Installation
 
+#### Prerequisites
+- **Python**: 3.10–3.13
+- **PyTorch**: 2.0+ with GPU support (CUDA 11.8+ or MPS for macOS)
+
+#### Step 1: Install PyTorch
+
+Choose your platform:
+
+<details>
+<summary><b>CUDA (Linux/Windows with NVIDIA GPU)</b></summary>
+
 ```bash
-pip install torch\>=2 torchvision
-pip install -e . # Basic
-pip install -e ".[gs]" # Gaussians Estimation and Rendering
-pip install -e ".[app]" # Gradio, python>=3.10
-pip install -e ".[all]" # ALL
+# CUDA 12.1 (recommended for RTX 30/40 series)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# CUDA 11.8 (for older GPUs)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
+
+Verify installation:
+```bash
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+</details>
+
+<details>
+<summary><b>macOS (Apple Silicon M1/M2/M3/M4)</b></summary>
+
+```bash
+# MPS (Metal Performance Shaders) auto-detected
+pip install torch torchvision
+```
+
+Verify installation:
+```bash
+python -c "import torch; print(f'MPS available: {torch.backends.mps.is_available()}')"
+```
+
+**Note**: xformers will be automatically excluded (not needed on macOS).
+</details>
+
+<details>
+<summary><b>CPU Only</b></summary>
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```
+</details>
+
+See [PyTorch Get Started](https://pytorch.org/get-started/locally/) for more options.
+
+#### Step 2: Install Depth Anything 3
+
+```bash
+# Basic installation (depth estimation only)
+pip install -e .
+
+# With Gradio UI (requires Python >=3.10)
+pip install -e ".[app]"
+
+# With 3D Gaussians support (requires torch already installed)
+pip install -e ".[gs]"
+
+# Complete installation (all features)
+pip install -e ".[all]"
+```
+
+#### Step 3: Verify Installation
+
+```bash
+# Test import
+python -c "from depth_anything_3.api import DepthAnything3; print('✅ Installation successful!')"
+
+# Test CLI
+da3 --help
+```
+
+#### Troubleshooting Installation
+
+<details>
+<summary><b>macOS: "ERROR: Failed building wheel for xformers"</b></summary>
+
+**This is expected and normal!** xformers is automatically excluded on macOS. The installation will continue and use PyTorch's native implementation. No action needed.
+
+If the error persists:
+```bash
+pip install -e . --no-build-isolation
+```
+</details>
+
+<details>
+<summary><b>"No module named 'torch'"</b></summary>
+
+PyTorch is not installed. Follow Step 1 above to install PyTorch first.
+</details>
+
+<details>
+<summary><b>"No module named 'gradio'" when running Gradio app</b></summary>
+
+Install with app dependencies:
+```bash
+pip install -e ".[app]"
+```
+</details>
+
+For more troubleshooting, see the [Troubleshooting](#-troubleshooting) section below.
+
+---
 
 For detailed model information, please refer to the [Model Cards](#-model-cards) section below.
 
@@ -250,6 +380,294 @@ Generally, you should observe that DA3-LARGE achieves comparable results to VGGT
 
 - **Older GPUs without XFormers support**: See [Issue #11](https://github.com/ByteDance-Seed/Depth-Anything-3/issues/11). Thanks to [@S-Mahoney](https://github.com/S-Mahoney) for the solution!
 
+---
+
+## 🔧 Troubleshooting
+
+### Installation Issues
+
+<details>
+<summary><b>macOS: ERROR: Failed building wheel for xformers</b></summary>
+
+**Status**: ✅ **Expected behavior** (not an error)
+
+**Explanation**: xformers is automatically excluded on macOS via `platform_system != 'Darwin'` in dependencies. The code will use PyTorch's native SwiGLU implementation instead.
+
+**Solution**: No action needed. Installation will complete successfully.
+
+If build still fails:
+```bash
+pip install -e . --no-build-isolation
+```
+</details>
+
+<details>
+<summary><b>ModuleNotFoundError: No module named 'torch'</b></summary>
+
+**Cause**: PyTorch not installed or not in Python path.
+
+**Solution**: Install PyTorch first:
+```bash
+# CUDA
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# macOS
+pip install torch torchvision
+
+# CPU
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+```
+
+Then install Depth Anything 3:
+```bash
+pip install -e .
+```
+</details>
+
+<details>
+<summary><b>ModuleNotFoundError: No module named 'gradio'</b></summary>
+
+**Cause**: Gradio dependencies not installed.
+
+**Solution**:
+```bash
+pip install -e ".[app]"
+```
+</details>
+
+---
+
+### Runtime Issues
+
+<details>
+<summary><b>CUDA/MPS: Out of Memory (OOM)</b></summary>
+
+**Symptoms**:
+- `RuntimeError: CUDA out of memory`
+- `RuntimeError: MPS backend out of memory`
+
+**Solutions** (try in order):
+
+1. **Reduce batch size**:
+   ```python
+   model = DepthAnything3(batch_size=2)  # Instead of default
+   ```
+
+2. **Use smaller model**:
+   ```python
+   model = DepthAnything3.from_pretrained("depth-anything/DA3-SMALL")
+   ```
+
+3. **Enable mixed precision**:
+   ```python
+   model = DepthAnything3(mixed_precision="fp16")
+   ```
+
+4. **Lower input resolution**:
+   ```python
+   prediction = model.inference(images, process_res=384)  # Instead of 504
+   ```
+
+5. **Process fewer images**:
+   ```python
+   for batch in [images[i:i+2] for i in range(0, len(images), 2)]:
+       prediction = model.inference(batch)
+   ```
+
+**Memory requirements** (approximate):
+| Model | FP32 (GB) | FP16 (GB) |
+|-------|-----------|-----------|
+| DA3-SMALL | 4-6 | 2-3 |
+| DA3-BASE | 6-8 | 3-4 |
+| DA3-LARGE | 10-14 | 5-7 |
+| DA3-GIANT | 18-24 | 9-12 |
+
+</details>
+
+<details>
+<summary><b>macOS: Slow inference (<10 images/sec)</b></summary>
+
+**Symptoms**: Processing is slower than expected benchmarks (13-28 img/s).
+
+**Causes & Solutions**:
+
+1. **torch.compile() enabled** (auto-disabled by default, but check):
+   ```python
+   model = DepthAnything3(enable_compile=False)  # Ensure disabled
+   ```
+
+2. **Using FP16 on MPS** (can be unstable):
+   ```python
+   model = DepthAnything3(mixed_precision="fp32")  # Use FP32 for stability
+   ```
+
+3. **Thermal throttling** (M1/M2 under load):
+   - Check Activity Monitor → CPU/GPU usage
+   - Ensure adequate cooling
+   - Close other heavy applications
+
+4. **Swap memory pressure**:
+   - Check: `sysctl vm.swapusage`
+   - Solution: Reduce batch size or close apps
+
+</details>
+
+<details>
+<summary><b>CUDA: Slow inference despite GPU</b></summary>
+
+**Diagnostic**:
+```python
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"Device: {torch.cuda.get_device_name(0)}")
+print(f"torch.compile enabled: {model.enable_compile}")
+```
+
+**Solutions**:
+
+1. **Ensure compilation is enabled**:
+   ```python
+   model = DepthAnything3(enable_compile=True)
+   ```
+
+2. **Use appropriate precision**:
+   ```python
+   # Ampere+ GPUs (RTX 30/40 series)
+   model = DepthAnything3(mixed_precision="bfloat16")
+
+   # Older GPUs
+   model = DepthAnything3(mixed_precision="float16")
+   ```
+
+3. **Check CUDA version compatibility**:
+   ```bash
+   python -c "import torch; print(torch.version.cuda)"
+   # Should match your driver (nvidia-smi)
+   ```
+
+</details>
+
+<details>
+<summary><b>NaN or Inf in output</b></summary>
+
+**Symptoms**: Depth map contains NaN or infinite values.
+
+**Solutions**:
+
+1. **Disable mixed precision**:
+   ```python
+   model = DepthAnything3(mixed_precision=False)  # Use FP32
+   ```
+
+2. **Check input images**:
+   - Ensure images are valid (not corrupted)
+   - Check for extreme brightness/darkness
+   - Verify format (RGB, not BGR)
+
+3. **Try different model**:
+   ```python
+   # Try smaller model first
+   model = DepthAnything3.from_pretrained("depth-anything/DA3-SMALL")
+   ```
+
+</details>
+
+---
+
+### Performance Tuning
+
+<details>
+<summary><b>How to maximize speed?</b></summary>
+
+**Platform-specific recommendations**:
+
+**CUDA**:
+```python
+model = DepthAnything3(
+    model_name="da3-small",      # Smaller model
+    enable_compile=True,         # Enable compilation
+    mixed_precision="bfloat16",  # Ampere+ GPUs
+    batch_size=8                 # Larger batches
+)
+```
+
+**macOS (MPS)**:
+```python
+model = DepthAnything3(
+    model_name="da3-small",      # Smaller model
+    enable_compile=False,        # Disable (auto)
+    mixed_precision="fp16",      # 2x faster (if stable)
+    batch_size=4                 # Balance speed/memory
+)
+```
+
+**CPU**:
+```python
+model = DepthAnything3(
+    model_name="da3-small",      # Smallest model
+    enable_compile=False,        # No benefit on CPU
+    mixed_precision="fp16",      # Reduce memory
+    batch_size=1                 # Minimize memory
+)
+```
+
+See [examples/performance_tuning.py](examples/performance_tuning.py) for benchmarking.
+
+</details>
+
+<details>
+<summary><b>How to maximize accuracy?</b></summary>
+
+```python
+model = DepthAnything3(
+    model_name="da3-giant",      # Largest model
+    enable_compile=False,        # Avoid numerical changes
+    mixed_precision=False        # Full FP32 precision
+)
+
+prediction = model.inference(
+    images,
+    process_res=672              # Higher resolution
+)
+```
+
+**Trade-off**: ~4x slower, 2x more memory.
+
+</details>
+
+---
+
+### Common Error Messages
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `No module named 'depth_anything_3'` | Package not installed | `pip install -e .` |
+| `CUDA out of memory` | Insufficient GPU memory | Reduce batch_size, use fp16, or smaller model |
+| `MPS backend out of memory` | Insufficient unified memory | Reduce batch_size or resolution |
+| `Failed to download model` | Network issue or invalid model name | Check internet connection, verify model name |
+| `Expected 3 channels, got 1` | Grayscale image input | Convert to RGB: `Image.open(path).convert('RGB')` |
+| `torch.compile() not supported` | Old PyTorch version | Upgrade: `pip install --upgrade torch>=2.0` |
+
+---
+
+### Getting Help
+
+If your issue isn't covered here:
+
+1. **Check existing issues**: [GitHub Issues](https://github.com/Aedelon/Depth-Anything-3/issues)
+2. **Check upstream issues**: [Upstream Issues](https://github.com/ByteDance-Seed/Depth-Anything-3/issues)
+3. **Run diagnostics**:
+   ```bash
+   python examples/performance_tuning.py --profile
+   ```
+4. **Open new issue** with:
+   - Platform (CUDA/MPS/CPU)
+   - Python version
+   - PyTorch version
+   - Full error traceback
+   - Minimal reproduction code
+
+---
 
 ## 📝 Citations
 If you find Depth Anything 3 useful in your research or projects, please cite our work:

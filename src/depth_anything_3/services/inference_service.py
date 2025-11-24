@@ -35,14 +35,12 @@ class InferenceService:
         *,
         batch_size: Optional[int] = None,
         mixed_precision: Optional[Union[bool, str]] = None,
-        force_fp32_on_mps: bool = False,
     ):
         self.model_dir = model_dir
         self.device = device
         self.model = None
         self.batch_size = batch_size
         self.mixed_precision = mixed_precision
-        self.force_fp32_on_mps = force_fp32_on_mps
 
     def load_model(self):
         """Load model"""
@@ -52,7 +50,6 @@ class InferenceService:
                 self.model_dir,
                 batch_size=self.batch_size,
                 mixed_precision=self.mixed_precision,
-                force_fp32_on_mps=self.force_fp32_on_mps,
             ).to(self.device)
         return self.model
 
@@ -191,7 +188,6 @@ def run_inference(
     device: str = "cuda",
     batch_size: Optional[int] = None,
     mixed_precision: Optional[Union[bool, str]] = None,
-    force_fp32_on_mps: bool = False,
     backend_url: Optional[str] = None,
     export_format: str = "mini_npz-glb",
     process_res: int = 504,
@@ -212,7 +208,6 @@ def run_inference(
         device,
         batch_size=batch_size,
         mixed_precision=mixed_precision,
-        force_fp32_on_mps=force_fp32_on_mps,
     )
 
     if backend_url:

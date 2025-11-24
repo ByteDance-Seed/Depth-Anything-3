@@ -230,7 +230,6 @@ class DepthAnything3App:
                             infer_gs,
                             batch_size_ctrl,
                             mixed_precision_ctrl,
-                            force_fp32_on_mps_ctrl,
                         ) = self.ui_components.create_inference_control_section()
 
                         # Display control section - includes 3DGS options, buttons, and Visualization Options  # noqa: E501
@@ -283,7 +282,6 @@ class DepthAnything3App:
                 process_res_method_dropdown,
                 batch_size_ctrl,
                 mixed_precision_ctrl,
-                force_fp32_on_mps_ctrl,
                 save_percentage,
                 submit_btn,
                 clear_btn,
@@ -330,7 +328,6 @@ class DepthAnything3App:
         process_res_method_dropdown: gr.Dropdown,
         batch_size_ctrl: gr.Number,
         mixed_precision_ctrl: gr.Dropdown,
-        force_fp32_on_mps_ctrl: gr.Checkbox,
         save_percentage: gr.Slider,
         submit_btn: gr.Button,
         clear_btn: gr.ClearButton,
@@ -385,7 +382,6 @@ class DepthAnything3App:
                 process_res_method_dropdown,
                 batch_size_ctrl,
                 mixed_precision_ctrl,
-                force_fp32_on_mps_ctrl,
                 selected_first_frame_state,
                 save_percentage,
                 # pass num_max_points
@@ -420,7 +416,6 @@ class DepthAnything3App:
             process_res_method_dropdown,
             batch_size_ctrl,
             mixed_precision_ctrl,
-            force_fp32_on_mps_ctrl,
             target_dir_output,
             is_example,
             reconstruction_output,
@@ -501,7 +496,6 @@ class DepthAnything3App:
         process_res_method_dropdown: gr.Dropdown,
         batch_size_ctrl: gr.Number,
         mixed_precision_ctrl: gr.Dropdown,
-        force_fp32_on_mps_ctrl: gr.Checkbox,
         target_dir_output: gr.Textbox,
         is_example: gr.Textbox,
         reconstruction_output: gr.Model3D,
@@ -518,7 +512,6 @@ class DepthAnything3App:
             process_res_method_dropdown,
             batch_size_ctrl,
             mixed_precision_ctrl,
-            force_fp32_on_mps_ctrl,
         ]
 
         # Set up change handlers for all visualization controls
@@ -679,8 +672,8 @@ Examples:
     # Directory configuration
     parser.add_argument(
         "--model-dir",
-        default="depth-anything/DA3NESTED-GIANT-LARGE",
-        help="Path to the model directory (default: depth-anything/DA3NESTED-GIANT-LARGE)",
+        default="depth-anything/DA3-BASE",
+        help="Path to the model directory (default: depth-anything/DA3-BASE)",
     )
     parser.add_argument(
         "--workspace-dir",

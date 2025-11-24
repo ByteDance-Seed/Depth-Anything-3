@@ -162,10 +162,6 @@ def auto(
         "auto",
         help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
     ),
-    force_fp32_on_mps: bool = typer.Option(
-        False,
-        help="Force fp32 on MPS even if mixed_precision requests fp16.",
-    ),
 ):
     """
     Automatically detect input type and run appropriate processing.
@@ -235,7 +231,6 @@ def auto(
             export_feat_layers=export_feat_layers,
             batch_size=batch_size,
             mixed_precision=mp_value,
-            force_fp32_on_mps=force_fp32_on_mps,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -263,7 +258,6 @@ def auto(
             export_feat_layers=export_feat_layers,
             batch_size=batch_size,
             mixed_precision=mp_value,
-            force_fp32_on_mps=force_fp32_on_mps,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -291,7 +285,6 @@ def auto(
             export_feat_layers=export_feat_layers,
             batch_size=batch_size,
             mixed_precision=mp_value,
-            force_fp32_on_mps=force_fp32_on_mps,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -374,10 +367,6 @@ def image(
         "auto",
         help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
     ),
-    force_fp32_on_mps: bool = typer.Option(
-        False,
-        help="Force fp32 on MPS even if mixed_precision requests fp16.",
-    ),
 ):
     """Run camera pose and depth estimation on a single image."""
     # Process input
@@ -407,7 +396,6 @@ def image(
         export_feat_layers=export_feat_layers,
         batch_size=batch_size,
         mixed_precision=mp_value,
-        force_fp32_on_mps=force_fp32_on_mps,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -460,10 +448,6 @@ def images(
         "auto",
         help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
     ),
-    force_fp32_on_mps: bool = typer.Option(
-        False,
-        help="Force fp32 on MPS even if mixed_precision requests fp16.",
-    ),
 ):
     """Run camera pose and depth estimation on a directory of images."""
     # Process input
@@ -493,7 +477,6 @@ def images(
         export_feat_layers=export_feat_layers,
         batch_size=batch_size,
         mixed_precision=mp_value,
-        force_fp32_on_mps=force_fp32_on_mps,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -551,10 +534,6 @@ def colmap(
         "auto",
         help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
     ),
-    force_fp32_on_mps: bool = typer.Option(
-        False,
-        help="Force fp32 on MPS even if mixed_precision requests fp16.",
-    ),
 ):
     """Run pose conditioned depth estimation on COLMAP data."""
     # Process input
@@ -587,7 +566,6 @@ def colmap(
         align_to_input_ext_scale=align_to_input_ext_scale,
         batch_size=batch_size,
         mixed_precision=mp_value,
-        force_fp32_on_mps=force_fp32_on_mps,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -638,10 +616,6 @@ def video(
         "auto",
         help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
     ),
-    force_fp32_on_mps: bool = typer.Option(
-        False,
-        help="Force fp32 on MPS even if mixed_precision requests fp16.",
-    ),
 ):
     """Run depth estimation on video by extracting frames and processing them."""
     # Handle export directory
@@ -671,7 +645,6 @@ def video(
         export_feat_layers=export_feat_layers,
         batch_size=batch_size,
         mixed_precision=mp_value,
-        force_fp32_on_mps=force_fp32_on_mps,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,

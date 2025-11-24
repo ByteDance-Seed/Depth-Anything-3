@@ -148,7 +148,6 @@ with torch.autocast(device_type=device.type, dtype=autocast_dtype):
 - Par défaut désormais : fp32 (autocast désactivé) pour la stabilité.
 - Opt-in fp16 : passer `mixed_precision=True` ou `mixed_precision="float16"` pour activer l’autocast MPS.
 - `mixed_precision="bfloat16"` retombe automatiquement en fp16 (bf16 non supporté par PyTorch MPS).
-- `force_fp32_on_mps=True` garde fp32 même si un fp16 est demandé.
 
 **Rule of thumb:** If inference runs without errors/NaN, FP16 is faster. FP32 is the safety net.
 

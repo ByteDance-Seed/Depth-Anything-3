@@ -201,12 +201,12 @@ class UIComponents:
 
     def create_inference_control_section(
         self,
-    ) -> Tuple[gr.Dropdown, gr.Checkbox, gr.Number, gr.Dropdown, gr.Checkbox]:
+    ) -> Tuple[gr.Dropdown, gr.Checkbox, gr.Number, gr.Dropdown]:
         """
         Create the inference control section (before inference).
 
         Returns:
-            Tuple of (process_res_method_dropdown, infer_gs, batch_size, mixed_precision, force_fp32_on_mps)
+            Tuple of (process_res_method_dropdown, infer_gs, batch_size, mixed_precision)
         """
         with gr.Row():
             process_res_method_dropdown = gr.Dropdown(
@@ -242,13 +242,8 @@ class UIComponents:
                 label="Mixed precision",
                 info="MPS: default fp32; fp16 opt-in. CUDA: auto uses bf16/fp16.",
             )
-            force_fp32_on_mps = gr.Checkbox(
-                label="Force fp32 on MPS",
-                value=False,
-                info="Kill-switch: ignore fp16/bf16 requests on Mac MPS.",
-            )
 
-        return (process_res_method_dropdown, infer_gs, batch_size, mixed_precision, force_fp32_on_mps)
+        return (process_res_method_dropdown, infer_gs, batch_size, mixed_precision)
 
     def create_display_control_section(
         self,

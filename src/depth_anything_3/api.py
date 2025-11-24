@@ -23,8 +23,23 @@ from __future__ import annotations
 import time
 from typing import Optional, Sequence
 import numpy as np
-import torch
-import torch.nn as nn
+
+# Check torch import with helpful error message
+try:
+    import torch
+    import torch.nn as nn
+except ImportError as e:
+    raise ImportError(
+        "PyTorch is not installed. Please install it first:\n\n"
+        "  For CUDA (Linux/Windows with NVIDIA GPU):\n"
+        "    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121\n\n"
+        "  For macOS (Apple Silicon):\n"
+        "    pip install torch torchvision\n\n"
+        "  For CPU only:\n"
+        "    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu\n\n"
+        "See https://pytorch.org/get-started/locally/ for more installation options.\n"
+    ) from e
+
 from huggingface_hub import PyTorchModelHubMixin
 from PIL import Image
 
@@ -100,7 +115,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         enable_compile: bool | None = None,
         compile_mode: str = "reduce-overhead",
         batch_size: int | None = None,
-        force_fp32_on_mps: bool = False,
         mixed_precision: bool | str | None = None,
         **kwargs
     ):
@@ -120,8 +134,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                      - "max-autotune": Maximum performance tuning (slower compilation, CUDA only)
         batch_size: Batch size for processing images (default: None = process all at once).
                    Lower values reduce memory usage but may increase processing time.
-        force_fp32_on_mps: Force fp32 execution on MPS (disables autocast/mixed precision).
-                           Useful when certain ops fail in fp16 on Metal.
         mixed_precision: Mixed precision mode (default: None = auto-detect).
                         Options:
                         - None: Auto-detect (bfloat16 on CUDA if supported, float16 otherwise)
@@ -135,8 +147,22 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         self.model_name = model_name
         self.compile_mode = compile_mode
         self.batch_size = batch_size
+
+        # Validate mixed_precision parameter
+        valid_mixed_precision = [None, True, False, "auto", "fp16", "float16", "fp32", "float32", "bf16", "bfloat16"]
+        if mixed_precision not in valid_mixed_precision:
+            raise ValueError(
+                f"Invalid mixed_precision value: {mixed_precision!r}\n"
+                f"Valid options: {valid_mixed_precision}\n\n"
+                f"Examples:\n"
+                f"  - None or 'auto': Auto-detect (recommended)\n"
+                f"  - True: Enable with auto-detection\n"
+                f"  - False: Disable (use float32)\n"
+                f"  - 'fp16' or 'float16': Force float16\n"
+                f"  - 'fp32' or 'float32': Force float32\n"
+                f"  - 'bf16' or 'bfloat16': Force bfloat16 (CUDA Ampere+ only)\n"
+            )
         self.mixed_precision = mixed_precision
-        self.force_fp32_on_mps = force_fp32_on_mps
 
         # Auto-detect optimal compile setting based on device
         if enable_compile is None:
@@ -551,7 +577,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             Tuple of (use_autocast, dtype)
         """
         # If mixed precision is explicitly disabled
-        if self.mixed_precision is False or (self.force_fp32_on_mps and device.type == "mps"):
+        if self.mixed_precision is False:
             return False, None
 
         # If mixed precision is explicitly set to a dtype string
@@ -562,12 +588,16 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             }
             if self.mixed_precision in dtype_map:
                 # bf16 not reliably supported on MPS; fall back to fp16 there
-                if device.type == "mps" and self.mixed_precision == "bfloat16":
-                    logger.warn("bfloat16 is not supported on MPS; falling back to float16")
+                if device.type == "mps" and self.mixed_precision in ["bf16", "bfloat16"]:
+                    logger.warning(
+                        "bfloat16 is not supported on MPS (Apple Silicon). "
+                        "Falling back to float16. "
+                        "To suppress this warning, use mixed_precision='float16' explicitly."
+                    )
                     return True, torch.float16
                 return True, dtype_map[self.mixed_precision]
             else:
-                logger.warn(f"Unknown mixed precision dtype: {self.mixed_precision}, using auto-detect")
+                logger.warning(f"Unknown mixed precision dtype: {self.mixed_precision}, using auto-detect")
 
         # Auto-detect (default behavior when mixed_precision is None or True)
         if device.type == "cuda":
