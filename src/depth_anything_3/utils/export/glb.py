@@ -107,49 +107,17 @@ def export_to_glb(
     logger.info(f"conf_thresh_percentile: {conf_thresh_percentile}")
     logger.info(f"num max points: {num_max_points}")
     logger.info(f"Exporting to GLB with num_max_points: {num_max_points}")
-    if prediction.processed_images is None:
-        raise ValueError("prediction.processed_images is required but not available")
 
-    images_u8 = prediction.processed_images  # (N,H,W,3) uint8
-
-    # 2) Sky processing (if sky_mask is provided)
-    if getattr(prediction, "sky_mask", None) is not None:
-        set_sky_depth(prediction, prediction.sky_mask, sky_depth_def)
-
-    # 3) Confidence threshold (if no conf, then no filtering)
-    if filter_black_bg:
-        prediction.conf[(prediction.processed_images < 16).all(axis=-1)] = 1.0
-    if filter_white_bg:
-        prediction.conf[(prediction.processed_images >= 240).all(axis=-1)] = 1.0
-    conf_thr = get_conf_thresh(
-        prediction,
-        getattr(prediction, "sky_mask", None),
-        conf_thresh,
-        conf_thresh_percentile,
-        ensure_thresh_percentile,
+    points, colors, A = _generate_aligned_point_cloud(
+        prediction=prediction,
+        num_max_points=num_max_points,
+        conf_thresh=conf_thresh,
+        filter_black_bg=filter_black_bg,
+        filter_white_bg=filter_white_bg,
+        conf_thresh_percentile=conf_thresh_percentile,
+        ensure_thresh_percentile=ensure_thresh_percentile,
+        sky_depth_def=sky_depth_def,
     )
-
-    # 4) Back-project to world coordinates and get colors (world frame)
-    points, colors = _depths_to_world_points_with_colors(
-        prediction.depth,
-        prediction.intrinsics,
-        prediction.extrinsics,  # w2c
-        images_u8,
-        prediction.conf,
-        conf_thr,
-    )
-
-    # 5) Based on first camera orientation + glTF axis system, center by point cloud,
-    # construct alignment transform, and apply to point cloud
-    A = _compute_alignment_transform_first_cam_glTF_center_by_points(
-        prediction.extrinsics[0], points
-    )  # (4,4)
-
-    if points.shape[0] > 0:
-        points = trimesh.transform_points(points, A)
-
-    # 6) Clean + downsample
-    points, colors = _filter_and_downsample(points, colors, num_max_points)
 
     # 7) Assemble scene (add point cloud first)
     scene = trimesh.Scene()
@@ -430,3 +398,192 @@ def _hsv_to_rgb(h: float, s: float, v: float) -> tuple[float, float, float]:
     else:
         r, g, b = v, p, q
     return r, g, b
+
+
+def _depths_to_world_mesh(
+    prediction: Prediction,
+    conf_thr: float,
+    A: np.ndarray,
+    use_conf: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Triangulate each depth map on its image grid and merge into a single mesh.
+
+    Faces are only created where all four pixels of a quad are valid under the same
+    confidence/depth criteria used for the point cloud.
+    """
+    depth = prediction.depth
+    K = prediction.intrinsics
+    ext_w2c = prediction.extrinsics
+    images_u8 = prediction.processed_images
+
+    N, H, W = depth.shape
+    us, vs = np.meshgrid(np.arange(W), np.arange(H))
+    ones = np.ones_like(us)
+    pix = np.stack([us, vs, ones], axis=-1).reshape(-1, 3)  # (H*W,3)
+
+    vertices = []
+    colors = []
+    faces = []
+    vert_offset = 0
+
+    for i in range(N):
+        d = depth[i]  # (H,W)
+        valid = np.isfinite(d) & (d > 0)
+        if use_conf and prediction.conf is not None:
+            valid &= prediction.conf[i] >= conf_thr
+        if not np.any(valid):
+            continue
+
+        d_flat = d.reshape(-1)
+        mask_flat = valid.reshape(-1)
+        vidx = np.flatnonzero(mask_flat)
+
+        K_inv = np.linalg.inv(K[i])  # (3,3)
+        c2w = np.linalg.inv(_as_homogeneous44(ext_w2c[i]))  # (4,4)
+
+        rays = K_inv @ pix[vidx].T  # (3,M)
+        Xc = rays * d_flat[vidx][None, :]  # (3,M)
+        Xc_h = np.vstack([Xc, np.ones((1, Xc.shape[1]))])
+        Xw = (c2w @ Xc_h)[:3].T.astype(np.float32)  # (M,3)
+        Xw = trimesh.transform_points(Xw, A)
+
+        cols = images_u8[i].reshape(-1, 3)[vidx].astype(np.uint8)  # (M,3)
+
+        # Build index grid for triangulation only where all four pixels are valid
+        idx_grid = -np.ones((H, W), dtype=np.int64)
+        idx_grid.reshape(-1)[vidx] = np.arange(Xw.shape[0], dtype=np.int64) + vert_offset
+
+        tl = idx_grid[:-1, :-1]
+        tr = idx_grid[:-1, 1:]
+        bl = idx_grid[1:, :-1]
+        br = idx_grid[1:, 1:]
+        mask = (tl >= 0) & (tr >= 0) & (bl >= 0) & (br >= 0)
+        if np.any(mask):
+            tlm = tl[mask]
+            trm = tr[mask]
+            blm = bl[mask]
+            brm = br[mask]
+            tris = np.stack(
+                [
+                    np.stack([tlm, trm, brm], axis=1),
+                    np.stack([tlm, brm, blm], axis=1),
+                ],
+                axis=1,
+            ).reshape(-1, 3)
+            faces.append(tris)
+
+        vertices.append(Xw)
+        colors.append(cols)
+        vert_offset += Xw.shape[0]
+
+    if len(vertices) == 0:
+        logger.warning("PLY mesh export: no valid vertices were generated; face count = 0")
+        return (
+            np.zeros((0, 3), dtype=np.float32),
+            np.zeros((0, 3), dtype=np.uint8),
+            np.zeros((0, 3), dtype=np.int64),
+        )
+
+    verts = np.concatenate(vertices, axis=0)
+    cols = np.concatenate(colors, axis=0)
+    faces_arr = np.concatenate(faces, axis=0) if faces else np.zeros((0, 3), dtype=np.int64)
+    return verts, cols, faces_arr
+
+
+def _prepare_conf_and_threshold(
+    prediction: Prediction,
+    conf_thresh: float,
+    filter_black_bg: bool,
+    filter_white_bg: bool,
+    conf_thresh_percentile: float,
+    ensure_thresh_percentile: float,
+    sky_depth_def: float,
+) -> float:
+    """Apply sky/background handling and compute confidence threshold."""
+    if prediction.processed_images is None:
+        raise ValueError("prediction.processed_images is required but not available")
+
+    # Sky processing (if sky_mask is provided)
+    if getattr(prediction, "sky_mask", None) is not None:
+        set_sky_depth(prediction, prediction.sky_mask, sky_depth_def)
+
+    # Confidence threshold (if no conf, then no filtering)
+    if filter_black_bg:
+        prediction.conf[(prediction.processed_images < 16).all(axis=-1)] = 1.0
+    if filter_white_bg:
+        prediction.conf[(prediction.processed_images >= 240).all(axis=-1)] = 1.0
+    conf_thr = get_conf_thresh(
+        prediction,
+        getattr(prediction, "sky_mask", None),
+        conf_thresh,
+        conf_thresh_percentile,
+        ensure_thresh_percentile,
+    )
+    return conf_thr
+
+
+def _generate_aligned_point_cloud(
+    prediction: Prediction,
+    num_max_points: int,
+    conf_thresh: float,
+    filter_black_bg: bool,
+    filter_white_bg: bool,
+    conf_thresh_percentile: float,
+    ensure_thresh_percentile: float,
+    sky_depth_def: float,
+    precomputed_conf_thr: float | None = None,
+    skip_preprocessing: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Shared point cloud generation used by GLB/PLY exporters."""
+    if prediction.processed_images is None:
+        raise ValueError("prediction.processed_images is required but not available")
+
+    images_u8 = prediction.processed_images  # (N,H,W,3) uint8
+
+    if precomputed_conf_thr is None:
+        conf_thr = _prepare_conf_and_threshold(
+            prediction,
+            conf_thresh,
+            filter_black_bg,
+            filter_white_bg,
+            conf_thresh_percentile,
+            ensure_thresh_percentile,
+            sky_depth_def,
+        )
+    else:
+        conf_thr = precomputed_conf_thr
+        if not skip_preprocessing:
+            # Ensure preprocessing is applied when caller provides threshold but not preprocessing
+            _prepare_conf_and_threshold(
+                prediction,
+                conf_thresh,
+                filter_black_bg,
+                filter_white_bg,
+                conf_thresh_percentile,
+                ensure_thresh_percentile,
+                sky_depth_def,
+            )
+
+    # Back-project to world coordinates and get colors (world frame)
+    points, colors = _depths_to_world_points_with_colors(
+        prediction.depth,
+        prediction.intrinsics,
+        prediction.extrinsics,  # w2c
+        images_u8,
+        prediction.conf,
+        conf_thr,
+    )
+
+    # Based on first camera orientation + glTF axis system, center by point cloud,
+    # construct alignment transform, and apply to point cloud
+    A = _compute_alignment_transform_first_cam_glTF_center_by_points(
+        prediction.extrinsics[0], points
+    )  # (4,4)
+
+    if points.shape[0] > 0:
+        points = trimesh.transform_points(points, A)
+
+    # Clean + downsample
+    points, colors = _filter_and_downsample(points, colors, num_max_points)
+
+    return points, colors, A

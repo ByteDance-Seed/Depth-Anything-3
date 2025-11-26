@@ -167,7 +167,7 @@ class DepthAnything3App:
         def get_theme():
             return get_gradio_theme()
 
-        with gr.Blocks(theme=get_theme(), css=GRADIO_CSS) as demo:
+        with gr.Blocks(css=GRADIO_CSS) as demo:
             # State variables for the tabbed interface
             is_example = gr.Textbox(label="is_example", visible=False, value="None")
             processed_data_state = gr.State(value=None)

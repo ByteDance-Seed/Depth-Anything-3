@@ -67,7 +67,7 @@ da3 auto INPUT_PATH [OPTIONS]
 | `INPUT_PATH` | str | Required | Input path (image, directory, video, or COLMAP) |
 | `--model-dir` | str | Default model | Model directory path |
 | `--export-dir` | str | `debug` | Export directory |
-| `--export-format` | str | `glb` | Export format (supports `mini_npz`, `glb`, `feat_vis`, etc., can be combined with hyphens) |
+| `--export-format` | str | `glb` | Export format (supports `mini_npz`, `glb`, `ply`, `feat_vis`, etc., can be combined with hyphens) |
 | `--device` | str | `cuda` | Device to use |
 | `--use-backend` | bool | `False` | Use backend service for inference |
 | `--backend-url` | str | `http://localhost:8008` | Backend service URL |
@@ -78,8 +78,8 @@ da3 auto INPUT_PATH [OPTIONS]
 | `--fps` | float | `1.0` | [Video] Frame sampling FPS |
 | `--sparse-subdir` | str | `""` | [COLMAP] Sparse reconstruction subdirectory (e.g., `"0"` for `sparse/0/`) |
 | `--align-to-input-ext-scale` | bool | `True` | [COLMAP] Align prediction to input extrinsics scale |
-| `--conf-thresh-percentile` | float | `40.0` | [GLB] Lower percentile for adaptive confidence threshold |
-| `--num-max-points` | int | `1000000` | [GLB] Maximum number of points in the point cloud |
+| `--conf-thresh-percentile` | float | `40.0` | [GLB/PLY] Lower percentile for adaptive confidence threshold |
+| `--num-max-points` | int | `1000000` | [GLB/PLY] Maximum number of points in the point cloud |
 | `--show-cameras` | bool | `True` | [GLB] Show camera wireframes in the exported scene |
 | `--feat-vis-fps` | int | `15` | [FEAT_VIS] Frame rate for output video |
 
@@ -127,8 +127,8 @@ da3 image IMAGE_PATH [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices (comma-separated) |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
-| `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
-| `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
+| `--conf-thresh-percentile` | float | `40.0` | [GLB/PLY] Confidence threshold percentile |
+| `--num-max-points` | int | `1000000` | [GLB/PLY] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
 | `--feat-vis-fps` | int | `15` | [FEAT_VIS] Video frame rate |
 
@@ -179,8 +179,8 @@ da3 images IMAGES_DIR [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
-| `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
-| `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
+| `--conf-thresh-percentile` | float | `40.0` | [GLB/PLY] Confidence threshold percentile |
+| `--num-max-points` | int | `1000000` | [GLB/PLY] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
 | `--feat-vis-fps` | int | `15` | [FEAT_VIS] Video frame rate |
 
@@ -228,8 +228,8 @@ da3 video VIDEO_PATH [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
-| `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
-| `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
+| `--conf-thresh-percentile` | float | `40.0` | [GLB/PLY] Confidence threshold percentile |
+| `--num-max-points` | int | `1000000` | [GLB/PLY] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
 | `--feat-vis-fps` | int | `15` | [FEAT_VIS] Video frame rate |
 
@@ -281,8 +281,8 @@ da3 colmap COLMAP_DIR [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
-| `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
-| `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
+| `--conf-thresh-percentile` | float | `40.0` | [GLB/PLY] Confidence threshold percentile |
+| `--num-max-points` | int | `1000000` | [GLB/PLY] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
 | `--feat-vis-fps` | int | `15` | [FEAT_VIS] Video frame rate |
 
@@ -459,6 +459,7 @@ da3 gallery --gallery-dir ./workspace --open-browser
 - **`--export-format`**: Export format, supports combining multiple formats with hyphens:
   - 📦 `mini_npz`: Compressed NumPy format
   - 🎨 `glb`: glTF binary format (3D scene)
+- 🧊 `ply`: Colored point cloud in PLY format
   - 🔍 `feat_vis`: Feature visualization
   - Example: `mini_npz-glb` exports both formats
 
@@ -475,7 +476,7 @@ da3 gallery --gallery-dir ./workspace --open-browser
 - **`--export-feat`**: Layer indices for exporting intermediate features (comma-separated)
   - Example: `"9,19,29,39"`
 
-### 🎨 GLB Export Parameters
+### 🎨 GLB/PLY Export Parameters
 
 - **`--conf-thresh-percentile`**: Lower percentile for adaptive confidence threshold (default 40.0)
   - Used to filter low-confidence points
@@ -483,7 +484,13 @@ da3 gallery --gallery-dir ./workspace --open-browser
 - **`--num-max-points`**: Maximum number of points in point cloud (default 1,000,000)
   - Controls output file size and performance
 
-- **`--show-cameras`**: Show camera wireframes in exported scene (default True)
+- **`--show-cameras`**: Show camera wireframes in exported scene (GLB only, default True)
+
+- **`--ply-as-points`**: Write PLY using `element point` (no faces) instead of a legacy vertex-only mesh (default False)
+
+- **`--ply-as-mesh`**: Triangulate depth maps into a mesh with faces and export as PLY (default False)
+
+- **Format alias**: `--export-format ply_mesh` enables mesh export without flags.
 
 ### 🔍 Feature Visualization Parameters
 
@@ -500,7 +507,7 @@ da3 gallery --gallery-dir ./workspace --open-browser
   - Empty string uses `sparse/` directory
   - `"0"` uses `sparse/0/` directory
 
-- **`--align-to-input-ext-scale`**: Align prediction to input extrinsics scale (default True)
+- **`--align-to-input-ext-scale`**: Align prediction to input extrinsics scale (default False)
   - Ensures depth estimation is consistent with COLMAP scale
 
 ---

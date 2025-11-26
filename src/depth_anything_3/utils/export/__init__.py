@@ -20,6 +20,7 @@ from .depth_vis import export_to_depth_vis
 from .feat_vis import export_to_feat_vis
 from .glb import export_to_glb
 from .npz import export_to_mini_npz, export_to_npz
+from .ply import export_to_ply
 
 
 def export(
@@ -36,6 +37,14 @@ def export(
 
     if export_format == "glb":
         export_to_glb(prediction, export_dir, **kwargs.get(export_format, {}))
+    elif export_format == "ply":
+        export_to_ply(prediction, export_dir, **kwargs.get(export_format, {}))
+    elif export_format == "ply_mesh":
+        ply_kwargs = kwargs.get("ply", {})
+        # Avoid duplicate as_mesh if user already passed it via ply kwargs
+        if "as_mesh" not in ply_kwargs:
+            ply_kwargs = {**ply_kwargs, "as_mesh": True}
+        export_to_ply(prediction, export_dir, **ply_kwargs)
     elif export_format == "mini_npz":
         export_to_mini_npz(prediction, export_dir)
     elif export_format == "npz":

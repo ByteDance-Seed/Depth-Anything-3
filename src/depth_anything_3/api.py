@@ -138,10 +138,12 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         export_dir: str | None = None,
         export_format: str = "mini_npz",
         export_feat_layers: Sequence[int] | None = None,
-        # GLB export parameters
+        # GLB/PLY export parameters
         conf_thresh_percentile: float = 40.0,
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
+        ply_as_points: bool = False,
+        ply_as_mesh: bool = False,
         # Feat_vis export parameters
         feat_vis_fps: int = 15,
         # Other export parameters, e.g., gs_ply, gs_video
@@ -164,8 +166,10 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             export_dir: Directory to export results
             export_format: Export format (mini_npz, npz, glb, ply, gs, gs_video)
             export_feat_layers: Layer indices to export intermediate features from
-            conf_thresh_percentile: [GLB] Lower percentile for adaptive confidence threshold (default: 40.0) # noqa: E501
-            num_max_points: [GLB] Maximum number of points in the point cloud (default: 1,000,000)
+            conf_thresh_percentile: [GLB/PLY] Lower percentile for adaptive confidence threshold (default: 40.0) # noqa: E501
+            num_max_points: [GLB/PLY] Maximum number of points in the point cloud (default: 1,000,000)
+            ply_as_points: [PLY] Write the PLY as a point cloud (no faces) (default: False)
+            ply_as_mesh: [PLY] Triangulate depth maps into a mesh with faces (default: False)
             show_cameras: [GLB] Show camera wireframes in the exported scene (default: True)
             feat_vis_fps: [FEAT_VIS] Frame rate for output video (default: 15)
             export_kwargs: additional arguments to export functions.
@@ -222,7 +226,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                             "out_image_hw": render_hw,
                         }
                     )
-            # Add GLB export parameters
+            # Add GLB/PLY export parameters
             if "glb" in export_format:
                 if "glb" not in export_kwargs:
                     export_kwargs["glb"] = {}
@@ -233,6 +237,21 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                         "show_cameras": show_cameras,
                     }
                 )
+            if "ply" in export_format:
+                if "ply" not in export_kwargs:
+                    export_kwargs["ply"] = {}
+                export_kwargs["ply"].update(
+                    {
+                        "conf_thresh_percentile": conf_thresh_percentile,
+                        "num_max_points": num_max_points,
+                        "as_points": ply_as_points,
+                        "as_mesh": ply_as_mesh,
+                    }
+                )
+            if "ply_mesh" in export_format:
+                if "ply" not in export_kwargs:
+                    export_kwargs["ply"] = {}
+                export_kwargs["ply"]["as_mesh"] = True
             # Add Feat_vis export parameters
             if "feat_vis" in export_format:
                 if "feat_vis" not in export_kwargs:

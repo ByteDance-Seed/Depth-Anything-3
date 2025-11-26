@@ -58,6 +58,8 @@ class InferenceRequest(BaseModel):
     conf_thresh_percentile: float = 40.0
     num_max_points: int = 1_000_000
     show_cameras: bool = True
+    ply_as_points: bool = False
+    ply_as_mesh: bool = False
     # Feat_vis export parameters
     feat_vis_fps: int = 15
 
@@ -281,6 +283,8 @@ def _run_inference_task(task_id: str):
             "conf_thresh_percentile": request.conf_thresh_percentile,
             "num_max_points": request.num_max_points,
             "show_cameras": request.show_cameras,
+            "ply_as_points": request.ply_as_points,
+            "ply_as_mesh": request.ply_as_mesh,
             "feat_vis_fps": request.feat_vis_fps,
         }
 

@@ -143,13 +143,19 @@ def auto(
     ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
-        40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
+        40.0, help="[GLB/PLY] Lower percentile for adaptive confidence threshold"
     ),
     num_max_points: int = typer.Option(
-        1_000_000, help="[GLB] Maximum number of points in the point cloud"
+        1_000_000, help="[GLB/PLY] Maximum number of points in the point cloud"
     ),
     show_cameras: bool = typer.Option(
         True, help="[GLB] Show camera wireframes in the exported scene"
+    ),
+    ply_as_points: bool = typer.Option(
+        False, help="[PLY] Write PLY as point cloud elements (no faces)"
+    ),
+    ply_as_mesh: bool = typer.Option(
+        False, help="[PLY] Triangulate depth maps into a mesh with faces"
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
@@ -209,6 +215,8 @@ def auto(
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
+            ply_as_points=ply_as_points,
+            ply_as_mesh=ply_as_mesh,
             feat_vis_fps=feat_vis_fps,
         )
 
@@ -234,6 +242,8 @@ def auto(
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
+            ply_as_points=ply_as_points,
+            ply_as_mesh=ply_as_mesh,
             feat_vis_fps=feat_vis_fps,
         )
 
@@ -320,13 +330,19 @@ def image(
     ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
-        40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
+        40.0, help="[GLB/PLY] Lower percentile for adaptive confidence threshold"
     ),
     num_max_points: int = typer.Option(
-        1_000_000, help="[GLB] Maximum number of points in the point cloud"
+        1_000_000, help="[GLB/PLY] Maximum number of points in the point cloud"
     ),
     show_cameras: bool = typer.Option(
         True, help="[GLB] Show camera wireframes in the exported scene"
+    ),
+    ply_as_points: bool = typer.Option(
+        False, help="[PLY] Write PLY as point cloud elements (no faces)"
+    ),
+    ply_as_mesh: bool = typer.Option(
+        False, help="[PLY] Triangulate depth maps into a mesh with faces"
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
@@ -358,6 +374,8 @@ def image(
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
+        ply_as_points=ply_as_points,
+        ply_as_mesh=ply_as_mesh,
         feat_vis_fps=feat_vis_fps,
     )
 
@@ -389,13 +407,19 @@ def images(
     ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
-        40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
+        40.0, help="[GLB/PLY] Lower percentile for adaptive confidence threshold"
     ),
     num_max_points: int = typer.Option(
-        1_000_000, help="[GLB] Maximum number of points in the point cloud"
+        1_000_000, help="[GLB/PLY] Maximum number of points in the point cloud"
     ),
     show_cameras: bool = typer.Option(
         True, help="[GLB] Show camera wireframes in the exported scene"
+    ),
+    ply_as_points: bool = typer.Option(
+        False, help="[PLY] Write PLY as point cloud elements (no faces)"
+    ),
+    ply_as_mesh: bool = typer.Option(
+        False, help="[PLY] Triangulate depth maps into a mesh with faces"
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
@@ -427,6 +451,8 @@ def images(
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
+        ply_as_points=ply_as_points,
+        ply_as_mesh=ply_as_mesh,
         feat_vis_fps=feat_vis_fps,
     )
 
@@ -463,13 +489,16 @@ def colmap(
     ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
-        40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
+        40.0, help="[GLB/PLY] Lower percentile for adaptive confidence threshold"
     ),
     num_max_points: int = typer.Option(
-        1_000_000, help="[GLB] Maximum number of points in the point cloud"
+        1_000_000, help="[GLB/PLY] Maximum number of points in the point cloud"
     ),
     show_cameras: bool = typer.Option(
         True, help="[GLB] Show camera wireframes in the exported scene"
+    ),
+    ply_as_points: bool = typer.Option(
+        False, help="[PLY] Write PLY as point cloud elements (no faces)"
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
@@ -504,6 +533,8 @@ def colmap(
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
+        ply_as_points=ply_as_points,
+        ply_as_mesh=ply_as_mesh,
         feat_vis_fps=feat_vis_fps,
     )
 
@@ -533,13 +564,16 @@ def video(
     ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
-        40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
+        40.0, help="[GLB/PLY] Lower percentile for adaptive confidence threshold"
     ),
     num_max_points: int = typer.Option(
-        1_000_000, help="[GLB] Maximum number of points in the point cloud"
+        1_000_000, help="[GLB/PLY] Maximum number of points in the point cloud"
     ),
     show_cameras: bool = typer.Option(
         True, help="[GLB] Show camera wireframes in the exported scene"
+    ),
+    ply_as_points: bool = typer.Option(
+        False, help="[PLY] Write PLY as point cloud elements (no faces)"
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
@@ -571,6 +605,8 @@ def video(
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
+        ply_as_points=ply_as_points,
+        ply_as_mesh=ply_as_mesh,
         feat_vis_fps=feat_vis_fps,
     )
 

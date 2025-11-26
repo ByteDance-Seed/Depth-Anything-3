@@ -54,6 +54,8 @@ class InferenceService:
         conf_thresh_percentile: float = 40.0,
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
+        ply_as_points: bool = False,
+        ply_as_mesh: bool = False,
         feat_vis_fps: int = 15,
     ) -> Any:
         """Run local inference"""
@@ -74,6 +76,8 @@ class InferenceService:
             "conf_thresh_percentile": conf_thresh_percentile,
             "num_max_points": num_max_points,
             "show_cameras": show_cameras,
+            "ply_as_points": ply_as_points,
+            "ply_as_mesh": ply_as_mesh,
             "feat_vis_fps": feat_vis_fps,
         }
 
@@ -107,6 +111,8 @@ class InferenceService:
         conf_thresh_percentile: float = 40.0,
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
+        ply_as_points: bool = False,
+        ply_as_mesh: bool = False,
         feat_vis_fps: int = 15,
     ) -> Dict[str, Any]:
         """Run backend inference"""
@@ -129,6 +135,8 @@ class InferenceService:
             "conf_thresh_percentile": conf_thresh_percentile,
             "num_max_points": num_max_points,
             "show_cameras": show_cameras,
+            "ply_as_points": ply_as_points,
+            "ply_as_mesh": ply_as_mesh,
             "feat_vis_fps": feat_vis_fps,
         }
 
@@ -184,6 +192,8 @@ def run_inference(
     conf_thresh_percentile: float = 40.0,
     num_max_points: int = 1_000_000,
     show_cameras: bool = True,
+    ply_as_points: bool = False,
+    ply_as_mesh: bool = False,
     feat_vis_fps: int = 15,
 ) -> Union[Any, Dict[str, Any]]:
     """Unified inference interface"""
@@ -205,6 +215,8 @@ def run_inference(
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
+            ply_as_points=ply_as_points,
+            ply_as_mesh=ply_as_mesh,
             feat_vis_fps=feat_vis_fps,
         )
     else:
@@ -221,5 +233,7 @@ def run_inference(
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
+            ply_as_points=ply_as_points,
+            ply_as_mesh=ply_as_mesh,
             feat_vis_fps=feat_vis_fps,
         )

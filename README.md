@@ -149,6 +149,12 @@ da3 auto assets/examples/SOH \
     --export-dir ${GALLERY_DIR}/TEST_CLI/SOH \
     --model-dir ${MODEL_DIR}
 
+# CLI auto mode exporting a PLY point cloud
+da3 auto assets/examples/SOH \
+    --export-format ply \
+    --export-dir ${GALLERY_DIR}/TEST_PLY/SOH \
+    --model-dir ${MODEL_DIR}
+
 ```
 
 The model architecture is defined in [`DepthAnything3Net`](src/depth_anything_3/model/da3.py), and specified with a Yaml config file located at [`src/depth_anything_3/configs`](src/depth_anything_3/configs). The input and output processing are handled by [`DepthAnything3`](src/depth_anything_3/api.py). To customize the model architecture, simply create a new config file (*e.g.*, `path/to/new/config`) as:

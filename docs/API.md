@@ -182,7 +182,7 @@ prediction = model.inference(
 
 ### 🎯 Pose Alignment Parameters
 
-#### `align_to_input_ext_scale` (default: True)
+#### `align_to_input_ext_scale` (default: False)
 - **Type**: `bool`
 - **Description**: When True the predicted extrinsics are replaced with the input
   ones and the depth maps are rescaled to match their metric scale. When False the
@@ -260,7 +260,7 @@ These parameters are passed directly to the `inference()` method and only apply 
 - **Type**: `int`
 - **Description**: Maximum number of points in the exported point cloud. If the point cloud exceeds this limit, it will be downsampled.
 
-##### `show_cameras` (default: True)
+##### `show_cameras` (default: False)
 - **Type**: `bool`
 - **Description**: Whether to include camera wireframes in the exported GLB file for visualization.
 
@@ -323,7 +323,18 @@ The API supports multiple export formats for different use cases:
 - **Parameters** (passed via `inference()` method directly):
   - `conf_thresh_percentile` (float, default: 40.0): Lower percentile for adaptive confidence threshold. Points below this confidence percentile will be filtered out.
   - `num_max_points` (int, default: 1,000,000): Maximum number of points in the exported point cloud. If exceeded, points will be downsampled.
-  - `show_cameras` (bool, default: True): Whether to include camera wireframes in the exported GLB file for visualization.
+  - `show_cameras` (bool, default: False): Whether to include camera wireframes in the exported GLB file for visualization.
+
+### 🧊 `ply`
+- **Description**: Colored point cloud in the PLY format
+ - **Contents**: Point cloud aligned to the same axes/centering as the GLB export with per-point RGB colors
+- **Use case**: Import into point cloud tools such as Meshlab or CloudCompare
+- **Parameters** (passed via `inference()` method directly):
+  - `conf_thresh_percentile` (float, default: 40.0): Lower percentile for adaptive confidence threshold. Points below this confidence percentile will be filtered out.
+  - `num_max_points` (int, default: 1,000,000): Maximum number of points in the exported point cloud. If exceeded, points will be downsampled.
+  - `ply_as_points` (bool, default: False): Export using PLY point elements (`element point`, no faces). Enable to switch from the legacy vertex-only mesh export.
+  - `ply_as_mesh` (bool, default: False): Triangulate depth maps into a mesh with faces before exporting.
+  - **Format alias**: Using `export_format="ply_mesh"` forces mesh export even if flags are omitted.
 
 ### ✨ `gs_ply`
 - **Description**: Gaussian Splatting point cloud format
