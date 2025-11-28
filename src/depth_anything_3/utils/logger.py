@@ -64,6 +64,10 @@ class Logger:
     def warn(self, *args, **kwargs):
         self.log("WARN:", *args, **kwargs)
 
+    def warning(self, *args, **kwargs):
+        """Alias for warn() to match standard logging interface."""
+        self.warn(*args, **kwargs)
+
     def info(self, *args, **kwargs):
         self.log("INFO:", *args, **kwargs)
 
