@@ -65,8 +65,8 @@ class InputProcessor:
     def __call__(
         self,
         image: list[np.ndarray | Image.Image | str],
-        extrinsics: list[np.ndarray | None] | None = None,
-        intrinsics: list[np.ndarray | None] | None = None,
+        extrinsics: np.ndarray | None = None,
+        intrinsics: np.ndarray | None = None,
         process_res: int = 504,
         process_res_method: str = "upper_bound_resize",
         *,
@@ -74,7 +74,7 @@ class InputProcessor:
         print_progress: bool = False,
         sequential: bool | None = None,
         desc: str | None = "Preprocess",
-    ) -> tuple[torch.Tensor, list[np.ndarray | None], list[np.ndarray | None]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """
         Returns:
             (tensor, extrinsics_list, intrinsics_list)
@@ -109,7 +109,7 @@ class InputProcessor:
             if out_ixts is not None and out_ixts[0] is not None
             else None
         )
-        return batch_tensor, out_exts, out_ixts
+        return (batch_tensor, out_exts, out_ixts)
 
     # -----------------------------
     # __call__ helpers
@@ -120,8 +120,8 @@ class InputProcessor:
     def _validate_and_pack_meta(
         self,
         images: list[np.ndarray | Image.Image | str],
-        extrinsics: list[np.ndarray | None] | None,
-        intrinsics: list[np.ndarray | None] | None,
+        extrinsics: np.ndarray | None,
+        intrinsics: np.ndarray | None,
     ) -> tuple[list[np.ndarray | None] | None, list[np.ndarray | None] | None]:
         if extrinsics is not None and len(extrinsics) != len(images):
             raise ValueError("Length of extrinsics must match images when provided.")

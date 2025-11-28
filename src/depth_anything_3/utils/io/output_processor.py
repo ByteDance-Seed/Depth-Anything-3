@@ -87,7 +87,7 @@ class OutputProcessor:
         depth = model_output["depth"].squeeze(0).squeeze(-1).cpu().numpy()  # (N, H, W)
         return depth
 
-    def _extract_conf(self, model_output: dict[str, torch.Tensor]) -> np.ndarray:
+    def _extract_conf(self, model_output: dict[str, torch.Tensor]) -> np.ndarray | None:
         """
         Extract confidence tensor from model output and convert to numpy.
 
@@ -102,7 +102,7 @@ class OutputProcessor:
             conf = conf.squeeze(0).cpu().numpy()  # (N, H, W)
         return conf
 
-    def _extract_extrinsics(self, model_output: dict[str, torch.Tensor]) -> np.ndarray:
+    def _extract_extrinsics(self, model_output: dict[str, torch.Tensor]) -> np.ndarray | None:
         """
         Extract extrinsics tensor from model output and convert to numpy.
 
@@ -117,7 +117,7 @@ class OutputProcessor:
             extrinsics = extrinsics.squeeze(0).cpu().numpy()  # (N, 4, 4)
         return extrinsics
 
-    def _extract_intrinsics(self, model_output: dict[str, torch.Tensor]) -> np.ndarray:
+    def _extract_intrinsics(self, model_output: dict[str, torch.Tensor]) -> np.ndarray | None:
         """
         Extract intrinsics tensor from model output and convert to numpy.
 
@@ -132,7 +132,7 @@ class OutputProcessor:
             intrinsics = intrinsics.squeeze(0).cpu().numpy()  # (N, 3, 3)
         return intrinsics
 
-    def _extract_sky(self, model_output: dict[str, torch.Tensor]) -> np.ndarray:
+    def _extract_sky(self, model_output: dict[str, torch.Tensor]) -> np.ndarray | None:
         """
         Extract sky tensor from model output and convert to numpy.
 

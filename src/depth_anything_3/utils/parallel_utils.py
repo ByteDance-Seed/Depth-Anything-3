@@ -73,7 +73,9 @@ def parallel_execution(
 ):
     # Partially copy from EasyVolumetricVideo (parallel_execution)
     # NOTE: we expect first arg / or kwargs to be distributed
-    # NOTE: print_progress arg is reserved
+    # NOTE: print_progress arg is reserved.
+    # `*args` packs all positional arguments passed to the function into a tuple
+    args = list(args)
 
     def get_length(args: List, kwargs: Dict):
         for a in args:

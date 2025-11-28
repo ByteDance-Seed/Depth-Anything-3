@@ -18,22 +18,28 @@ Model backend service for Depth Anything 3.
 Provides HTTP API for model inference with persistent model loading.
 """
 
-import gc
 import os
 import posixpath
 import time
 import uuid
+
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 import numpy as np
-import torch
+
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from ..api import DepthAnything3
+from ..utils.memory import (
+    get_gpu_memory_info,
+    cleanup_cuda_memory,
+    check_memory_availability,
+    estimate_memory_requirement,
+)
 
 
 class InferenceRequest(BaseModel):
@@ -181,109 +187,16 @@ def _process_next_task():
     _executor.submit(_run_inference_task, task_id)
 
 
-def _get_gpu_memory_info():
-    """Get current GPU memory usage information."""
-    if not torch.cuda.is_available():
-        return None
-
-    try:
-        device = torch.cuda.current_device()
-        total_memory = torch.cuda.get_device_properties(device).total_memory
-        allocated_memory = torch.cuda.memory_allocated(device)
-        reserved_memory = torch.cuda.memory_reserved(device)
-        free_memory = total_memory - reserved_memory
-
-        return {
-            "total_gb": total_memory / 1024**3,
-            "allocated_gb": allocated_memory / 1024**3,
-            "reserved_gb": reserved_memory / 1024**3,
-            "free_gb": free_memory / 1024**3,
-            "utilization": (reserved_memory / total_memory) * 100,
-        }
-    except Exception as e:
-        print(f"Warning: Failed to get GPU memory info: {e}")
-        return None
+# get_gpu_memory_info imported from depth_anything_3.utils.memory
 
 
-def _cleanup_cuda_memory():
-    """Helper function to perform comprehensive CUDA memory cleanup."""
-    try:
-        if torch.cuda.is_available():
-            # Log memory before cleanup
-            mem_before = _get_gpu_memory_info()
-
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-            gc.collect()
-
-            # Log memory after cleanup
-            mem_after = _get_gpu_memory_info()
-
-            if mem_before and mem_after:
-                freed = mem_before["reserved_gb"] - mem_after["reserved_gb"]
-                print(
-                    f"CUDA cleanup: freed {freed:.2f}GB, "
-                    f"available: {mem_after['free_gb']:.2f}GB/{mem_after['total_gb']:.2f}GB"
-                )
-            else:
-                print("CUDA memory cleanup completed")
-    except Exception as e:
-        print(f"Warning: CUDA cleanup failed: {e}")
+# cleanup_cuda_memory imported from depth_anything_3.utils.memory
 
 
-def _check_memory_availability(required_gb: float = 2.0) -> tuple[bool, str]:
-    """
-    Check if there's enough GPU memory available.
-
-    Args:
-        required_gb: Minimum required memory in GB
-
-    Returns:
-        Tuple of (is_available, message)
-    """
-    if not torch.cuda.is_available():
-        return False, "CUDA is not available"
-
-    try:
-        mem_info = _get_gpu_memory_info()
-        if mem_info is None:
-            return True, "Cannot check memory, proceeding anyway"
-
-        if mem_info["free_gb"] < required_gb:
-            return False, (
-                f"Insufficient GPU memory: {mem_info['free_gb']:.2f}GB available, "
-                f"{required_gb:.2f}GB required. "
-                f"Total: {mem_info['total_gb']:.2f}GB, "
-                f"Used: {mem_info['reserved_gb']:.2f}GB ({mem_info['utilization']:.1f}%)"
-            )
-
-        return True, (
-            f"Memory check passed: {mem_info['free_gb']:.2f}GB available, "
-            f"{required_gb:.2f}GB required"
-        )
-    except Exception as e:
-        return True, f"Memory check failed: {e}, proceeding anyway"
+# check_memory_availability imported from depth_anything_3.utils.memory
 
 
-def _estimate_memory_requirement(num_images: int, process_res: int) -> float:
-    """
-    Estimate GPU memory requirement in GB.
-
-    Args:
-        num_images: Number of images to process
-        process_res: Processing resolution
-
-    Returns:
-        Estimated memory requirement in GB
-    """
-    # Rough estimation: base model (2GB) + per-image overhead
-    base_memory = 2.0
-    per_image_memory = (process_res / 504) ** 2 * 0.5  # Scale with resolution
-    total_memory = base_memory + (
-        num_images * per_image_memory * 0.1
-    )  # Batch processing reduces per-image cost
-    return total_memory
+# estimate_memory_requirement imported from depth_anything_3.utils.memory
 
 
 def _run_inference_task(task_id: str):
@@ -314,21 +227,21 @@ def _run_inference_task(task_id: str):
 
         # Pre-inference cleanup to ensure maximum available memory
         print(f"[{task_id}] Pre-inference cleanup...")
-        _cleanup_cuda_memory()
+        cleanup_cuda_memory()
 
         # Check memory availability
-        estimated_memory = _estimate_memory_requirement(num_images, request.process_res)
-        mem_available, mem_msg = _check_memory_availability(estimated_memory)
+        estimated_memory = estimate_memory_requirement(num_images, request.process_res)
+        mem_available, mem_msg = check_memory_availability(estimated_memory)
         print(f"[{task_id}] {mem_msg}")
 
         if not mem_available:
             # Try aggressive cleanup
             print(f"[{task_id}] Insufficient memory, attempting aggressive cleanup...")
-            _cleanup_cuda_memory()
+            cleanup_cuda_memory()
             time.sleep(0.5)  # Give system time to reclaim memory
 
             # Check again
-            mem_available, mem_msg = _check_memory_availability(estimated_memory)
+            mem_available, mem_msg = check_memory_availability(estimated_memory)
             if not mem_available:
                 raise RuntimeError(
                     f"Insufficient GPU memory after cleanup. {mem_msg}\n"
@@ -347,7 +260,7 @@ def _run_inference_task(task_id: str):
             model = _backend.get_model()
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                _cleanup_cuda_memory()
+                cleanup_cuda_memory()
                 raise RuntimeError(
                     f"OOM during model loading: {str(e)}\n"
                     f"Try reducing the batch size or resolution."
@@ -400,7 +313,7 @@ def _run_inference_task(task_id: str):
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                _cleanup_cuda_memory()
+                cleanup_cuda_memory()
                 raise RuntimeError(
                     f"OOM during inference: {str(e)}\n"
                     f"Settings: {num_images} images, resolution={request.process_res}\n"
@@ -415,7 +328,7 @@ def _run_inference_task(task_id: str):
 
         # Post-inference cleanup
         print(f"[{task_id}] Post-inference cleanup...")
-        _cleanup_cuda_memory()
+        cleanup_cuda_memory()
 
         # Calculate total processing time
         total_time = time.time() - start_time
@@ -450,7 +363,7 @@ def _run_inference_task(task_id: str):
         print(f"[{task_id}] Task failed after {total_time:.2f}s: {error_msg}")
 
         # Always attempt cleanup on failure
-        _cleanup_cuda_memory()
+        cleanup_cuda_memory()
 
         _tasks[task_id].status = "failed"
         _tasks[task_id].completed_at = time.time()
@@ -468,7 +381,7 @@ def _run_inference_task(task_id: str):
         try:
             if inference_started:
                 print(f"[{task_id}] Final cleanup in finally block...")
-                _cleanup_cuda_memory()
+                cleanup_cuda_memory()
         except Exception as e:
             print(f"[{task_id}] Warning: Finally block cleanup failed: {e}")
 
@@ -1248,7 +1161,7 @@ def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] 
         status = _backend.get_status()
 
         # Add GPU memory information
-        gpu_memory = _get_gpu_memory_info()
+        gpu_memory = get_gpu_memory_info()
         if gpu_memory:
             status["gpu_memory"] = {
                 "total_gb": round(gpu_memory["total_gb"], 2),
@@ -1321,7 +1234,7 @@ def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] 
     @_app.get("/gpu-memory")
     async def get_gpu_memory():
         """Get detailed GPU memory information."""
-        gpu_memory = _get_gpu_memory_info()
+        gpu_memory = get_gpu_memory_info()
         if gpu_memory is None:
             return {
                 "available": False,
@@ -1465,7 +1378,7 @@ def start_server(
     """Start the backend server."""
     app = create_app(model_dir, device, gallery_dir)
 
-    print(f"Starting Depth Anything 3 Backend...")
+    print("Starting Depth Anything 3 Backend...")
     print(f"Model directory: {model_dir}")
     print(f"Device: {device}")
     print(f"Server: http://{host}:{port}")

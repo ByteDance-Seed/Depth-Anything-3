@@ -10,7 +10,7 @@ opencv-python
 xformers
 open3d
 fastapi
-unicorn
+uvicorn
 requests
 typer
 pillow
@@ -21,3 +21,4 @@ moviepy
 plyfile
 pillow_heif
 safetensors
+pycolmap
