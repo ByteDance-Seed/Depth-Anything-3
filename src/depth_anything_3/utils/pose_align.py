@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List
+import logging
+from typing import List, Optional, Tuple
+
 import numpy as np
 import torch
+from evo.core.geometry import GeometryException
 from evo.core.trajectory import PosePath3D
 
 from depth_anything_3.utils.geometry import affine_inverse, affine_inverse_np
+
+logger = logging.getLogger(__name__)
 
 
 def batch_apply_alignment_to_enc(
@@ -81,12 +86,26 @@ def _poses_from_ext(ext_ref, ext_est):
     return pose_ref, pose_est
 
 
-def _umeyama_sim3_from_paths(pose_ref, pose_est):
-    path_ref = PosePath3D(poses_se3=pose_ref.copy())
-    path_est = PosePath3D(poses_se3=pose_est.copy())
-    r, t, s = path_est.align(path_ref, correct_scale=True)
-    pose_est_aligned = np.stack(path_est.poses_se3)
-    return r, t, s, pose_est_aligned
+def _umeyama_sim3_from_paths(
+    pose_ref, pose_est
+) -> Optional[Tuple[np.ndarray, np.ndarray, float, np.ndarray]]:
+    """Compute Umeyama Sim(3) alignment between two pose trajectories.
+
+    Returns:
+        Tuple of (rotation, translation, scale, aligned_poses) if successful,
+        None if alignment fails due to degenerate poses (insufficient motion).
+    """
+    try:
+        path_ref = PosePath3D(poses_se3=pose_ref.copy())
+        path_est = PosePath3D(poses_se3=pose_est.copy())
+        r, t, s = path_est.align(path_ref, correct_scale=True)
+        pose_est_aligned = np.stack(path_est.poses_se3)
+        return r, t, s, pose_est_aligned
+    except GeometryException as e:
+        logger.warning(
+            f"Umeyama alignment failed (degenerate poses - insufficient camera motion): {e}"
+        )
+        return None
 
 
 def _apply_sim3_to_poses(poses, r, t, s):
@@ -149,7 +168,11 @@ def _ransac_align_sim3(
 
     # Fit again with best inliers
     if best_inliers is not None and best_inliers.sum() >= 3:
-        r, t, s, _ = _umeyama_sim3_from_paths(pose_ref[best_inliers], pose_est[best_inliers])
+        result = _umeyama_sim3_from_paths(pose_ref[best_inliers], pose_est[best_inliers])
+        if result is not None:
+            r, t, s, _ = result
+        else:
+            r, t, s = best_model
     else:
         r, t, s = best_model
     return r, t, s
@@ -164,19 +187,25 @@ def align_poses_umeyama(
     inlier_thresh=None,
     ransac_max_iters=10,
     random_state=None,
-):
+) -> Optional[Tuple]:
     """
     Align estimated trajectory to reference using Umeyama Sim(3).
     Default no RANSAC; if ransac=True, use RANSAC (max iterations default 10).
     - sub_n defaults to half the number of frames (rounded up, at least 3)
     - inlier_thresh defaults to median of "distance from each estimated pose to
       nearest reference pose after pre-alignment"
-    Returns rotation (3x3), translation (3,), scale; optionally returns aligned extrinsics (4x4).
+
+    Returns:
+        If return_aligned=False: (rotation (3x3), translation (3,), scale) or None if alignment fails.
+        If return_aligned=True: (rotation, translation, scale, aligned_extrinsics (4x4)) or None if alignment fails.
     """
     pose_ref, pose_est = _poses_from_ext(ext_ref, ext_est)
 
     if not ransac:
-        r, t, s, pose_est_aligned = _umeyama_sim3_from_paths(pose_ref, pose_est)
+        result = _umeyama_sim3_from_paths(pose_ref, pose_est)
+        if result is None:
+            return None
+        r, t, s, pose_est_aligned = result
     else:
         r, t, s = _ransac_align_sim3(
             pose_ref,

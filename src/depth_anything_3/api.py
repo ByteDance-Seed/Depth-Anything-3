@@ -321,13 +321,22 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         if extrinsics is None:
             return prediction
         prediction.intrinsics = intrinsics.numpy()
-        _, _, scale, aligned_extrinsics = align_poses_umeyama(
+        alignment_result = align_poses_umeyama(
             prediction.extrinsics,
             extrinsics.numpy(),
             ransac=len(extrinsics) >= ransac_view_thresh,
             return_aligned=True,
             random_state=42,
         )
+        if alignment_result is None:
+            # Alignment failed due to degenerate poses (insufficient camera motion)
+            # Fall back to using model-estimated poses without alignment
+            logger.warning(
+                "Pose alignment failed due to insufficient camera motion. "
+                "Using model-estimated poses and relative depth."
+            )
+            return prediction
+        _, _, scale, aligned_extrinsics = alignment_result
         if align_to_input_ext_scale:
             prediction.extrinsics = extrinsics[..., :3, :].numpy()
             prediction.depth /= scale
