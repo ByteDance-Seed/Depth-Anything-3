@@ -23,7 +23,6 @@ from depth_anything_3.app.modules.file_handlers import FileHandler
 from depth_anything_3.app.modules.model_inference import ModelInference
 from depth_anything_3.app.modules.ui_components import UIComponents
 from depth_anything_3.app.modules.utils import (
-    cleanup_memory,
     create_depth_visualization,
     get_logo_base64,
     get_scene_info,
@@ -40,6 +39,5 @@ __all__ = [
     "create_depth_visualization",
     "save_to_gallery_func",
     "get_scene_info",
-    "cleanup_memory",
     "get_logo_base64",
 ]

@@ -24,7 +24,7 @@ dependencies = [
     "xformers",
     "open3d",
     "fastapi",
-    "unicorn",
+    "uvicorn",
     "requests",
     "typer",
     "pillow",
@@ -38,6 +38,7 @@ dependencies = [
     "uvicorn",
     "moviepy==1.0.3",
     "typer>=0.9.0",
+    "pycolmap",
 ]
 
 [project.optional-dependencies]

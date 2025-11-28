@@ -19,7 +19,6 @@ This module handles all model-related operations including inference,
 data processing, and result preparation.
 """
 
-import gc
 import glob
 import os
 from typing import Any, Dict, Optional, Tuple
@@ -27,6 +26,7 @@ import numpy as np
 import torch
 
 from depth_anything_3.api import DepthAnything3
+from depth_anything_3.utils.memory import cleanup_cuda_memory
 from depth_anything_3.utils.export.glb import export_to_glb
 from depth_anything_3.utils.export.gs import export_to_gs_video
 
@@ -191,8 +191,8 @@ class ModelInference:
         # Process results
         processed_data = self._process_results(target_dir, prediction, image_paths)
 
-        # Clean up
-        torch.cuda.empty_cache()
+        # Clean up using centralized memory utilities for consistency with backend
+        cleanup_cuda_memory()
 
         return prediction, processed_data
 
@@ -279,8 +279,4 @@ class ModelInference:
 
         return processed_data
 
-    def cleanup(self) -> None:
-        """Clean up GPU memory."""
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+    # cleanup() removed: call cleanup_cuda_memory() directly where needed.

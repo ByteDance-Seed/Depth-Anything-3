@@ -32,6 +32,9 @@ All models are trained exclusively on **public academic datasets**.
   <img src="assets/images/da3_teaser.png" alt="Depth Anything 3" width="100%">
 </p> -->
 <p align="center">
+  <img src="assets/images/demo320-2.gif" alt="Depth Anything 3 - Left" width="70%">
+</p>
+<p align="center">
   <img src="assets/images/da3_radar.png" alt="Depth Anything 3" width="100%">
 </p>
 
@@ -81,7 +84,7 @@ We introduce a new benchmark to rigorously evaluate geometry prediction models o
 ```bash
 pip install torch\>=2 torchvision
 pip install -e . # Basic
-pip install -e ".[gs]" # Gaussians Estimation and Rendering
+pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70 # for gaussian head
 pip install -e ".[app]" # Gradio, python>=3.10
 pip install -e ".[all]" # ALL
 ```
@@ -198,6 +201,8 @@ Model = create_object(load_config("path/to/new/config"))
 ## 🗂️ Model Cards
 
 Generally, you should observe that DA3-LARGE achieves comparable results to VGGT.
+
+The Nested series uses an Any-view model to estimate pose and depth, and a monocular metric depth estimator for scaling. 
 
 | 🗃️ Model Name                  | 📏 Params | 📊 Rel. Depth | 📷 Pose Est. | 🧭 Pose Cond. | 🎨 GS | 📐 Met. Depth | ☁️ Sky Seg | 📄 License     |
 |-------------------------------|-----------|---------------|--------------|---------------|-------|---------------|-----------|----------------|

@@ -78,6 +78,7 @@ da3 auto INPUT_PATH [OPTIONS]
 | `--fps` | float | `1.0` | [Video] Frame sampling FPS |
 | `--sparse-subdir` | str | `""` | [COLMAP] Sparse reconstruction subdirectory (e.g., `"0"` for `sparse/0/`) |
 | `--align-to-input-ext-scale` | bool | `True` | [COLMAP] Align prediction to input extrinsics scale |
+| `--use-ray-pose` | bool | `False` | Use ray-based pose estimation instead of camera decoder |
 | `--conf-thresh-percentile` | float | `40.0` | [GLB] Lower percentile for adaptive confidence threshold |
 | `--num-max-points` | int | `1000000` | [GLB] Maximum number of points in the point cloud |
 | `--show-cameras` | bool | `True` | [GLB] Show camera wireframes in the exported scene |
@@ -127,6 +128,7 @@ da3 image IMAGE_PATH [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices (comma-separated) |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
+| `--use-ray-pose` | bool | `False` | Use ray-based pose estimation instead of camera decoder |
 | `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
 | `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
@@ -179,6 +181,7 @@ da3 images IMAGES_DIR [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
+| `--use-ray-pose` | bool | `False` | Use ray-based pose estimation instead of camera decoder |
 | `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
 | `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
@@ -228,6 +231,7 @@ da3 video VIDEO_PATH [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
+| `--use-ray-pose` | bool | `False` | Use ray-based pose estimation instead of camera decoder |
 | `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
 | `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |
@@ -281,6 +285,7 @@ da3 colmap COLMAP_DIR [OPTIONS]
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
 | `--export-feat` | str | `""` | Export feature layer indices |
 | `--auto-cleanup` | bool | `False` | Automatically clean export directory |
+| `--use-ray-pose` | bool | `False` | Use ray-based pose estimation instead of camera decoder |
 | `--conf-thresh-percentile` | float | `40.0` | [GLB] Confidence threshold percentile |
 | `--num-max-points` | int | `1000000` | [GLB] Maximum number of points |
 | `--show-cameras` | bool | `True` | [GLB] Show cameras |

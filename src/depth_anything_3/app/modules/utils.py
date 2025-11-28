@@ -19,15 +19,13 @@ This module contains helper functions for data processing, visualization,
 and file operations.
 """
 
-import gc
+
 import json
 import os
 import shutil
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-import torch
-
 
 def create_depth_visualization(depth: np.ndarray) -> Optional[np.ndarray]:
     """
@@ -185,11 +183,9 @@ def get_scene_info(examples_dir: str) -> List[Dict[str, Any]]:
     return scenes
 
 
-def cleanup_memory() -> None:
-    """Clean up GPU memory and garbage collect."""
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+# NOTE: cleanup was moved to a single canonical helper in
+# `depth_anything_3.utils.memory.cleanup_cuda_memory`.
+# Callers should import and call that directly instead of using this module.
 
 
 def get_logo_base64() -> Optional[str]:
