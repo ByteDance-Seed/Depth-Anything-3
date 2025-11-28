@@ -40,8 +40,7 @@ All models are trained exclusively on **public academic datasets**.
 
 
 ## 📰 News
-- **25-11-2025:** Add [Awesome DA3 Projects](#-awesome-da3-projects), a community-driven section featuring DA3-based applications.
-- **14-11-2025:** Paper, project page, code and models are all released.
+- **2025-11-14:** 🎉 Paper, project page, code and models are all released.
 
 ## ✨ Highlights
 
@@ -83,7 +82,7 @@ We introduce a new benchmark to rigorously evaluate geometry prediction models o
 ### 📦 Installation
 
 ```bash
-pip install xformers torch\>=2 torchvision
+pip install torch\>=2 torchvision
 pip install -e . # Basic
 pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70 # for gaussian head
 pip install -e ".[app]" # Gradio, python>=3.10
@@ -224,36 +223,7 @@ The Nested series uses an Any-view model to estimate pose and depth, and a monoc
 
 ## ❓ FAQ
 
-- **Monocular Metric Depth**: To obtain metric depth in meters from `DA3METRIC-LARGE`, use `metric_depth = focal * net_output / 300.`, where `focal` is the focal length in pixels (typically the average of fx and fy from the camera intrinsic matrix K). Note that the output from `DA3NESTED-GIANT-LARGE` is already in meters.
-
-- **Ray Head**:  Our API and CLI support `use_ray_head` arg, which means that the model will derive camera pose from ray head, which is generally slightly slower, but more accurate. Note that the default is `False` for faster inference speed. 
-  <details>
-  <summary>AUC3 Results for DA3NESTED-GIANT-LARGE</summary>
-  
-  | Model | HiRoom | ETH3D | DTU | 7Scenes | ScanNet++ | 
-  |-------|------|-------|-----|---------|-----------|
-  | `ray_head` | 84.4 | 52.6 | 93.9 | 29.5 | 89.4 |
-  | `cam_head` | 80.3 | 48.4 | 94.1 | 28.5 | 85.0 |
-
-  </details>
-
-
-
-
 - **Older GPUs without XFormers support**: See [Issue #11](https://github.com/ByteDance-Seed/Depth-Anything-3/issues/11). Thanks to [@S-Mahoney](https://github.com/S-Mahoney) for the solution!
-
-
-## 🏢 Awesome DA3 Projects
-
-A community-curated list of Depth Anything 3 integrations across 3D tools, creative pipelines, robotics, and web/VR viewers, including but not limited to these. You are welcome to submit your DA3-based project via PR, and we will review and feature it if applicable.
-
-- [DA3-blender](https://github.com/xy-gao/DA3-blender): Blender addon for DA3-based 3D reconstruction from a set of images. 
-
-- [ComfyUI-DepthAnythingV3](https://github.com/PozzettiAndrea/ComfyUI-DepthAnythingV3): ComfyUI nodes for Depth Anything 3, supporting single/multi-view and video-consistent depth with optional point‑cloud export.
-
-- [DA3-ROS2-Wrapper](https://github.com/GerdsenAI/GerdsenAI-Depth-Anything-3-ROS2-Wrapper): Real-time DA3 depth in ROS2 with multi-camera support. 
-
-- [VideoDepthViewer3D](https://github.com/amariichi/VideoDepthViewer3D): Streaming videos with DA3 metric depth to a Three.js/WebXR 3D viewer for VR/stereo playback.
 
 
 ## 📝 Citations
