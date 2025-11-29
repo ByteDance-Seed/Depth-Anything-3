@@ -54,6 +54,8 @@ class InferenceRequest(BaseModel):
     process_res_method: str = "upper_bound_resize"
     export_feat_layers: List[int] = []
     align_to_input_ext_scale: bool = True
+    batch_size: Optional[int] = None
+    mixed_precision: Optional[str] = "auto"  # auto|fp16|fp32|bf16
     # GLB export parameters
     conf_thresh_percentile: float = 40.0
     num_max_points: int = 1_000_000
@@ -105,6 +107,11 @@ class ModelBackend:
         self.load_start_time = None  # Time when model loading started
         self.load_completed_time = None  # Time when model loading completed
         self.last_used = None
+        # Track defaults used for currently loaded model to detect mismatches
+        self.request_defaults: Dict[str, Any] = {
+            "batch_size": None,
+            "mixed_precision": None,
+        }
 
     def load_model(self):
         """Load model if not already loaded."""
@@ -117,7 +124,11 @@ class ModelBackend:
             self.load_start_time = time.time()
             start_time = time.time()
 
-            self.model = DepthAnything3.from_pretrained(self.model_dir).to(self.device)
+            self.model = DepthAnything3.from_pretrained(
+                self.model_dir,
+                batch_size=self.request_defaults.get("batch_size"),
+                mixed_precision=self.request_defaults.get("mixed_precision"),
+            ).to(self.device)
             self.model.eval()
 
             self.model_loaded = True
@@ -137,6 +148,21 @@ class ModelBackend:
         if not self.model_loaded:
             return self.load_model()
         self.last_used = time.time()
+        return self.model
+
+    def ensure_model_matches_request(self, req: "InferenceRequest"):
+        """Reload model if incoming request options differ from current defaults."""
+        desired = {
+            "batch_size": req.batch_size,
+            "mixed_precision": None if req.mixed_precision == "auto" else req.mixed_precision,
+        }
+        if desired != self.request_defaults or not self.model_loaded:
+            # Update defaults and reload
+            self.request_defaults.update(desired)
+            self.model_loaded = False
+            self.model = None
+            cleanup_cuda_memory()
+            self.load_model()
         return self.model
 
     def get_status(self) -> Dict[str, Any]:
@@ -257,7 +283,7 @@ def _run_inference_task(task_id: str):
         _tasks[task_id].progress = 0.1
 
         try:
-            model = _backend.get_model()
+            model = _backend.ensure_model_matches_request(request)
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 cleanup_cuda_memory()
@@ -278,6 +304,8 @@ def _run_inference_task(task_id: str):
             "process_res_method": request.process_res_method,
             "export_feat_layers": request.export_feat_layers,
             "align_to_input_ext_scale": request.align_to_input_ext_scale,
+            "batch_size": request.batch_size,
+            "mixed_precision": None if request.mixed_precision == "auto" else request.mixed_precision,
             "conf_thresh_percentile": request.conf_thresh_percentile,
             "num_max_points": request.num_max_points,
             "show_cameras": request.show_cameras,

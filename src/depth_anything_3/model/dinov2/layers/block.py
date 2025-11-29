@@ -20,7 +20,12 @@ from .layer_scale import LayerScale
 from .mlp import Mlp
 
 logger = logging.getLogger("dinov2")
-XFORMERS_AVAILABLE = True
+
+try:
+    import xformers
+    XFORMERS_AVAILABLE = True
+except ImportError:
+    XFORMERS_AVAILABLE = False
 
 
 class Block(nn.Module):

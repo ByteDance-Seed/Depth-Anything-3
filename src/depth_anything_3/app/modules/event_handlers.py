@@ -139,6 +139,8 @@ class EventHandlers:
         filter_black_bg: bool = False,
         filter_white_bg: bool = False,
         process_res_method: str = "upper_bound_resize",
+        batch_size: Optional[int] = None,
+        mixed_precision: str = "auto",
         selected_first_frame: str = "",
         save_percentage: float = 30.0,
         num_max_points: int = 1_000_000,
@@ -214,6 +216,8 @@ class EventHandlers:
             prediction, processed_data = self.model_inference.run_inference(
                 target_dir,
                 process_res_method=process_res_method,
+                batch_size=batch_size,
+                mixed_precision=mixed_precision,
                 show_camera=show_cam,
                 selected_first_frame=selected_first_frame,
                 save_percentage=save_percentage,

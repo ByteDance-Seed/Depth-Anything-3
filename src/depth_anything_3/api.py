@@ -23,8 +23,23 @@ from __future__ import annotations
 import time
 from typing import Optional, Sequence
 import numpy as np
-import torch
-import torch.nn as nn
+
+# Check torch import with helpful error message
+try:
+    import torch
+    import torch.nn as nn
+except ImportError as e:
+    raise ImportError(
+        "PyTorch is not installed. Please install it first:\n\n"
+        "  For CUDA (Linux/Windows with NVIDIA GPU):\n"
+        "    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121\n\n"
+        "  For macOS (Apple Silicon):\n"
+        "    pip install torch torchvision\n\n"
+        "  For CPU only:\n"
+        "    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu\n\n"
+        "See https://pytorch.org/get-started/locally/ for more installation options.\n"
+    ) from e
+
 from huggingface_hub import PyTorchModelHubMixin
 from PIL import Image
 
@@ -40,10 +55,15 @@ from depth_anything_3.utils.pose_align import align_poses_umeyama
 
 # Platform-specific optimizations
 if torch.cuda.is_available():
+    # Enable autotuned kernels and tensor-core friendly math
     torch.backends.cudnn.benchmark = True
-    logger.info("CUDNN Benchmark Enabled for CUDA")
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
+    logger.info("CUDA detected: CUDNN benchmark + TF32 enabled")
 elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
     # macOS Metal Performance Shaders optimizations
+    torch.set_float32_matmul_precision("medium")
     logger.info("MPS (Metal) backend detected for macOS")
 else:
     torch.backends.cudnn.benchmark = False
@@ -95,6 +115,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         enable_compile: bool | None = None,
         compile_mode: str = "reduce-overhead",
         batch_size: int | None = None,
+        mixed_precision: bool | str | None = None,
         **kwargs
     ):
         """
@@ -113,12 +134,35 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
                      - "max-autotune": Maximum performance tuning (slower compilation, CUDA only)
         batch_size: Batch size for processing images (default: None = process all at once).
                    Lower values reduce memory usage but may increase processing time.
+        mixed_precision: Mixed precision mode (default: None = auto-detect).
+                        Options:
+                        - None: Auto-detect (bfloat16 on CUDA if supported, float16 otherwise)
+                        - True: Enable with auto-detection
+                        - False: Disable (use float32)
+                        - "bfloat16": Force bfloat16
+                        - "float16": Force float16
         **kwargs: Additional keyword arguments (currently unused).
         """
         super().__init__()
         self.model_name = model_name
         self.compile_mode = compile_mode
         self.batch_size = batch_size
+
+        # Validate mixed_precision parameter
+        valid_mixed_precision = [None, True, False, "auto", "fp16", "float16", "fp32", "float32", "bf16", "bfloat16"]
+        if mixed_precision not in valid_mixed_precision:
+            raise ValueError(
+                f"Invalid mixed_precision value: {mixed_precision!r}\n"
+                f"Valid options: {valid_mixed_precision}\n\n"
+                f"Examples:\n"
+                f"  - None or 'auto': Auto-detect (recommended)\n"
+                f"  - True: Enable with auto-detection\n"
+                f"  - False: Disable (use float32)\n"
+                f"  - 'fp16' or 'float16': Force float16\n"
+                f"  - 'fp32' or 'float32': Force float32\n"
+                f"  - 'bf16' or 'bfloat16': Force bfloat16 (CUDA Ampere+ only)\n"
+            )
+        self.mixed_precision = mixed_precision
 
         # Auto-detect optimal compile setting based on device
         if enable_compile is None:
@@ -160,7 +204,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         intrinsics: torch.Tensor | None = None,
         export_feat_layers: list[int] | None = None,
         infer_gs: bool = False,
-        use_ray_pose: bool = False,
     ) -> dict[str, torch.Tensor]:
         """
         Forward pass through the model.
@@ -170,19 +213,19 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             extrinsics: Optional camera extrinsics with shape ``(B, N, 4, 4)``.
             intrinsics: Optional camera intrinsics with shape ``(B, N, 3, 3)``.
             export_feat_layers: Layer indices to return intermediate features for.
-            infer_gs: Enable Gaussian Splatting branch.
-            use_ray_pose: Use ray-based pose estimation instead of camera decoder.
 
         Returns:
             Dictionary containing model predictions
         """
-        # Determine optimal autocast dtype
-        autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # Determine mixed precision settings
+        use_autocast, autocast_dtype = self._get_autocast_settings(image.device)
+
         with torch.no_grad():
-            with torch.autocast(device_type=image.device.type, dtype=autocast_dtype):
-                return self.model(
-                    image, extrinsics, intrinsics, export_feat_layers, infer_gs, use_ray_pose
-                )
+            if use_autocast:
+                with torch.autocast(device_type=image.device.type, dtype=autocast_dtype):
+                    return self.model(image, extrinsics, intrinsics, export_feat_layers, infer_gs)
+            else:
+                return self.model(image, extrinsics, intrinsics, export_feat_layers, infer_gs)
 
     def inference(
         self,
@@ -191,7 +234,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         intrinsics: np.ndarray | None = None,
         align_to_input_ext_scale: bool = True,
         infer_gs: bool = False,
-        use_ray_pose: bool = False,
         render_exts: np.ndarray | None = None,
         render_ixts: np.ndarray | None = None,
         render_hw: tuple[int, int] | None = None,
@@ -218,7 +260,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             intrinsics: Camera intrinsics (N, 3, 3)
             align_to_input_ext_scale: whether to align the input pose scale to the prediction
             infer_gs: Enable the 3D Gaussian branch (needed for `gs_ply`/`gs_video` exports)
-            use_ray_pose: Use ray-based pose estimation instead of camera decoder (default: False)
             render_exts: Optional render extrinsics for Gaussian video export
             render_ixts: Optional render intrinsics for Gaussian video export
             render_hw: Optional render resolution for Gaussian video export
@@ -247,17 +288,10 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             image, extrinsics, intrinsics, process_res, process_res_method
         )
 
-        # Prepare tensors for model
-        imgs, ex_t, in_t = self._prepare_model_inputs(imgs_cpu, extrinsics, intrinsics)
-
-        # Normalize extrinsics
-        ex_t_norm = self._normalize_extrinsics(ex_t.clone() if ex_t is not None else None)
-
-        # Run model forward pass
+        # Prepare tensors for model (with optional sub-batching to save memory)
         export_feat_layers = list(export_feat_layers) if export_feat_layers is not None else []
-
-        raw_output = self._run_model_forward(
-            imgs, ex_t_norm, in_t, export_feat_layers, infer_gs, use_ray_pose
+        raw_output = self._run_batched_forward(
+            imgs_cpu, extrinsics, intrinsics, export_feat_layers, infer_gs
         )
 
         # Convert raw output to prediction
@@ -357,6 +391,14 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         """Prepare tensors for model input."""
         device = self._get_model_device()
 
+        # Use pinned memory for faster H2D copies on CUDA
+        if device.type == 'cuda' and imgs_cpu.device.type == 'cpu':
+            imgs_cpu = imgs_cpu.pin_memory()
+            if extrinsics is not None and extrinsics.device.type == 'cpu':
+                extrinsics = extrinsics.pin_memory()
+            if intrinsics is not None and intrinsics.device.type == 'cpu':
+                intrinsics = intrinsics.pin_memory()
+
         # Apply channels_last to CPU tensor first (if it's 4D)
         if device.type in ('cuda', 'mps') and imgs_cpu.ndim == 4:
             imgs_cpu = imgs_cpu.to(memory_format=torch.channels_last)
@@ -380,6 +422,55 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         )
 
         return imgs, ex_t, in_t
+
+    def _run_batched_forward(
+        self,
+        imgs_cpu: torch.Tensor,
+        extrinsics: torch.Tensor | None,
+        intrinsics: torch.Tensor | None,
+        export_feat_layers: Sequence[int] | None,
+        infer_gs: bool,
+    ) -> dict[str, torch.Tensor]:
+        """
+        Run forward pass, optionally splitting the batch to save memory.
+
+        When self.batch_size is set and smaller than the number of images,
+        images are processed in sub-batches and outputs are concatenated.
+        """
+        num_imgs = imgs_cpu.shape[0]
+        bs = self.batch_size or num_imgs
+        if bs >= num_imgs:
+            imgs, ex_t, in_t = self._prepare_model_inputs(imgs_cpu, extrinsics, intrinsics)
+            ex_t_norm = self._normalize_extrinsics(ex_t.clone() if ex_t is not None else None)
+            return self._run_model_forward(imgs, ex_t_norm, in_t, export_feat_layers, infer_gs)
+
+        outputs: list[dict[str, torch.Tensor]] = []
+        for start in range(0, num_imgs, bs):
+            end = min(start + bs, num_imgs)
+            imgs_slice = imgs_cpu[start:end]
+            ex_slice = extrinsics[start:end] if extrinsics is not None else None
+            in_slice = intrinsics[start:end] if intrinsics is not None else None
+
+            imgs, ex_t, in_t = self._prepare_model_inputs(imgs_slice, ex_slice, in_slice)
+            ex_t_norm = self._normalize_extrinsics(ex_t.clone() if ex_t is not None else None)
+            outputs.append(self._run_model_forward(imgs, ex_t_norm, in_t, export_feat_layers, infer_gs))
+
+        return self._concat_model_outputs(outputs)
+
+    def _concat_model_outputs(self, outputs: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+        """Concatenate list of model outputs along the image dimension (dim=1)."""
+        if len(outputs) == 1:
+            return outputs[0]
+        merged: dict[str, torch.Tensor] = {}
+        keys = set().union(*(o.keys() for o in outputs))
+        for k in keys:
+            vals = [o[k] for o in outputs if k in o]
+            if torch.is_tensor(vals[0]) and vals[0].ndim >= 2 and vals[0].shape[0] == 1:
+                merged[k] = torch.cat(vals, dim=1)
+            else:
+                # For scalars or non-batched entries, keep the last one
+                merged[k] = vals[-1]
+        return merged
 
     def _normalize_extrinsics(self, ex_t: torch.Tensor | None) -> torch.Tensor | None:
         """Normalize extrinsics"""
@@ -428,7 +519,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         in_t: torch.Tensor | None,
         export_feat_layers: Sequence[int] | None = None,
         infer_gs: bool = False,
-        use_ray_pose: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Run model forward pass."""
         device = imgs.device
@@ -437,7 +527,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             torch.cuda.synchronize(device)
         start_time = time.time()
         feat_layers = list(export_feat_layers) if export_feat_layers is not None else None
-        output = self.forward(imgs, ex_t, in_t, feat_layers, infer_gs, use_ray_pose)
+        output = self.forward(imgs, ex_t, in_t, feat_layers, infer_gs)
         if need_sync:
             torch.cuda.synchronize(device)
         end_time = time.time()
@@ -475,6 +565,55 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         export(prediction, export_format, export_dir, **kwargs)
         end_time = time.time()
         logger.info(f"Export Results Done. Time: {end_time - start_time} seconds")
+
+    def _get_autocast_settings(self, device: torch.device) -> tuple[bool, torch.dtype | None]:
+        """
+        Determine autocast settings based on mixed_precision configuration.
+
+        Args:
+            device: The device where the model is running
+
+        Returns:
+            Tuple of (use_autocast, dtype)
+        """
+        # If mixed precision is explicitly disabled
+        if self.mixed_precision is False:
+            return False, None
+
+        # If mixed precision is explicitly set to a dtype string
+        if isinstance(self.mixed_precision, str):
+            dtype_map = {
+                "bfloat16": torch.bfloat16,
+                "float16": torch.float16,
+            }
+            if self.mixed_precision in dtype_map:
+                # bf16 not reliably supported on MPS; fall back to fp16 there
+                if device.type == "mps" and self.mixed_precision in ["bf16", "bfloat16"]:
+                    logger.warning(
+                        "bfloat16 is not supported on MPS (Apple Silicon). "
+                        "Falling back to float16. "
+                        "To suppress this warning, use mixed_precision='float16' explicitly."
+                    )
+                    return True, torch.float16
+                return True, dtype_map[self.mixed_precision]
+            else:
+                logger.warning(f"Unknown mixed precision dtype: {self.mixed_precision}, using auto-detect")
+
+        # Auto-detect (default behavior when mixed_precision is None or True)
+        if device.type == "cuda":
+            # Use bfloat16 on CUDA if supported, otherwise float16
+            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            return True, dtype
+        elif device.type == "mps":
+            # Default to fp32 on MPS; allow opt-in fp16 when explicitly requested
+            if self.mixed_precision is True:
+                return True, torch.float16
+            return False, None
+        else:
+            # CPU: optionally use float16 if explicitly enabled
+            if self.mixed_precision is True:
+                return True, torch.float16
+            return False, None
 
     def to(self, *args, **kwargs):
         """

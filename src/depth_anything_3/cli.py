@@ -20,6 +20,7 @@ Clean, modular command-line interface
 from __future__ import annotations
 
 import os
+from typing import Optional, Union
 import typer
 
 from depth_anything_3.services import start_server
@@ -141,10 +142,6 @@ def auto(
     align_to_input_ext_scale: bool = typer.Option(
         True, help="[COLMAP] Align prediction to input extrinsics scale"
     ),
-    # Pose estimation options
-    use_ray_pose: bool = typer.Option(
-        False, help="Use ray-based pose estimation instead of camera decoder"
-    ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
         40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
@@ -157,6 +154,14 @@ def auto(
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
+    batch_size: int = typer.Option(
+        None,
+        help="Sub-batch size to limit memory (process images in chunks). Default: all at once",
+    ),
+    mixed_precision: str = typer.Option(
+        "auto",
+        help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
+    ),
 ):
     """
     Automatically detect input type and run appropriate processing.
@@ -190,6 +195,20 @@ def auto(
     # Parse export_feat parameter
     export_feat_layers = parse_export_feat(export_feat)
 
+    # Parse mixed_precision option
+    mp_value: Optional[Union[bool, str]]
+    mp_lower = mixed_precision.lower() if mixed_precision else "auto"
+    if mp_lower in ("auto", "none"):
+        mp_value = None
+    elif mp_lower in ("fp16", "float16"):
+        mp_value = "float16"
+    elif mp_lower in ("bf16", "bfloat16"):
+        mp_value = "bfloat16"
+    elif mp_lower in ("fp32", "float32"):
+        mp_value = False
+    else:
+        raise typer.BadParameter("mixed_precision must be one of auto|fp16|fp32|bf16")
+
     # Route to appropriate handler
     if input_type == "image":
         typer.echo("Processing single image...")
@@ -210,7 +229,8 @@ def auto(
             process_res=process_res,
             process_res_method=process_res_method,
             export_feat_layers=export_feat_layers,
-            use_ray_pose=use_ray_pose,
+            batch_size=batch_size,
+            mixed_precision=mp_value,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -236,7 +256,8 @@ def auto(
             process_res=process_res,
             process_res_method=process_res_method,
             export_feat_layers=export_feat_layers,
-            use_ray_pose=use_ray_pose,
+            batch_size=batch_size,
+            mixed_precision=mp_value,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -262,7 +283,8 @@ def auto(
             process_res=process_res,
             process_res_method=process_res_method,
             export_feat_layers=export_feat_layers,
-            use_ray_pose=use_ray_pose,
+            batch_size=batch_size,
+            mixed_precision=mp_value,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -293,7 +315,6 @@ def auto(
             extrinsics=extrinsics,
             intrinsics=intrinsics,
             align_to_input_ext_scale=align_to_input_ext_scale,
-            use_ray_pose=use_ray_pose,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -326,10 +347,6 @@ def image(
     auto_cleanup: bool = typer.Option(
         False, help="Automatically clean export directory if it exists (no prompt)"
     ),
-    # Pose estimation options
-    use_ray_pose: bool = typer.Option(
-        False, help="Use ray-based pose estimation instead of camera decoder"
-    ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
         40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
@@ -342,6 +359,14 @@ def image(
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
+    batch_size: int = typer.Option(
+        None,
+        help="Sub-batch size to limit memory (process images in chunks). Default: all at once",
+    ),
+    mixed_precision: str = typer.Option(
+        "auto",
+        help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
+    ),
 ):
     """Run camera pose and depth estimation on a single image."""
     # Process input
@@ -356,6 +381,8 @@ def image(
     # Determine backend URL based on use_backend flag
     final_backend_url = backend_url if use_backend else None
 
+    mp_value = _parse_mixed_precision(mixed_precision)
+
     # Run inference
     run_inference(
         image_paths=image_files,
@@ -367,7 +394,8 @@ def image(
         process_res=process_res,
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
-        use_ray_pose=use_ray_pose,
+        batch_size=batch_size,
+        mixed_precision=mp_value,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -400,10 +428,6 @@ def images(
     auto_cleanup: bool = typer.Option(
         False, help="Automatically clean export directory if it exists (no prompt)"
     ),
-    # Pose estimation options
-    use_ray_pose: bool = typer.Option(
-        False, help="Use ray-based pose estimation instead of camera decoder"
-    ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
         40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
@@ -416,6 +440,14 @@ def images(
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
+    batch_size: int = typer.Option(
+        None,
+        help="Sub-batch size to limit memory (process images in chunks). Default: all at once",
+    ),
+    mixed_precision: str = typer.Option(
+        "auto",
+        help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
+    ),
 ):
     """Run camera pose and depth estimation on a directory of images."""
     # Process input
@@ -430,6 +462,8 @@ def images(
     # Determine backend URL based on use_backend flag
     final_backend_url = backend_url if use_backend else None
 
+    mp_value = _parse_mixed_precision(mixed_precision)
+
     # Run inference
     run_inference(
         image_paths=image_files,
@@ -441,7 +475,8 @@ def images(
         process_res=process_res,
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
-        use_ray_pose=use_ray_pose,
+        batch_size=batch_size,
+        mixed_precision=mp_value,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -479,10 +514,6 @@ def colmap(
     auto_cleanup: bool = typer.Option(
         False, help="Automatically clean export directory if it exists (no prompt)"
     ),
-    # Pose estimation options
-    use_ray_pose: bool = typer.Option(
-        False, help="Use ray-based pose estimation instead of camera decoder"
-    ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
         40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
@@ -495,6 +526,14 @@ def colmap(
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
+    batch_size: int = typer.Option(
+        None,
+        help="Sub-batch size to limit memory (process images in chunks). Default: all at once",
+    ),
+    mixed_precision: str = typer.Option(
+        "auto",
+        help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
+    ),
 ):
     """Run pose conditioned depth estimation on COLMAP data."""
     # Process input
@@ -508,6 +547,8 @@ def colmap(
 
     # Determine backend URL based on use_backend flag
     final_backend_url = backend_url if use_backend else None
+
+    mp_value = _parse_mixed_precision(mixed_precision)
 
     # Run inference
     run_inference(
@@ -523,7 +564,8 @@ def colmap(
         extrinsics=extrinsics,
         intrinsics=intrinsics,
         align_to_input_ext_scale=align_to_input_ext_scale,
-        use_ray_pose=use_ray_pose,
+        batch_size=batch_size,
+        mixed_precision=mp_value,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -554,10 +596,6 @@ def video(
     auto_cleanup: bool = typer.Option(
         False, help="Automatically clean export directory if it exists (no prompt)"
     ),
-    # Pose estimation options
-    use_ray_pose: bool = typer.Option(
-        False, help="Use ray-based pose estimation instead of camera decoder"
-    ),
     # GLB export options
     conf_thresh_percentile: float = typer.Option(
         40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
@@ -570,6 +608,14 @@ def video(
     ),
     # Feat_vis export options
     feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
+    batch_size: int = typer.Option(
+        None,
+        help="Sub-batch size to limit memory (process images in chunks). Default: all at once",
+    ),
+    mixed_precision: str = typer.Option(
+        "auto",
+        help="Mixed precision mode: auto | fp16 | fp32 | bf16. On MPS, fp16 is opt-in; default fp32.",
+    ),
 ):
     """Run depth estimation on video by extracting frames and processing them."""
     # Handle export directory
@@ -584,6 +630,8 @@ def video(
     # Determine backend URL based on use_backend flag
     final_backend_url = backend_url if use_backend else None
 
+    mp_value = _parse_mixed_precision(mixed_precision)
+
     # Run inference
     run_inference(
         image_paths=image_files,
@@ -595,7 +643,8 @@ def video(
         process_res=process_res,
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
-        use_ray_pose=use_ray_pose,
+        batch_size=batch_size,
+        mixed_precision=mp_value,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,

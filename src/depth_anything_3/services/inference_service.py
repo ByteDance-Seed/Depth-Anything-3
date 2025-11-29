@@ -28,16 +28,29 @@ from ..api import DepthAnything3
 class InferenceService:
     """Unified inference service class"""
 
-    def __init__(self, model_dir: str, device: str = "cuda"):
+    def __init__(
+        self,
+        model_dir: str,
+        device: str = "cuda",
+        *,
+        batch_size: Optional[int] = None,
+        mixed_precision: Optional[Union[bool, str]] = None,
+    ):
         self.model_dir = model_dir
         self.device = device
         self.model = None
+        self.batch_size = batch_size
+        self.mixed_precision = mixed_precision
 
     def load_model(self):
         """Load model"""
         if self.model is None:
             typer.echo(f"Loading model from {self.model_dir}...")
-            self.model = DepthAnything3.from_pretrained(self.model_dir).to(self.device)
+            self.model = DepthAnything3.from_pretrained(
+                self.model_dir,
+                batch_size=self.batch_size,
+                mixed_precision=self.mixed_precision,
+            ).to(self.device)
         return self.model
 
     def run_local_inference(
@@ -51,7 +64,6 @@ class InferenceService:
         extrinsics: Optional[np.ndarray] = None,
         intrinsics: Optional[np.ndarray] = None,
         align_to_input_ext_scale: bool = True,
-        use_ray_pose: bool = False,
         conf_thresh_percentile: float = 40.0,
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
@@ -72,7 +84,6 @@ class InferenceService:
             "process_res_method": process_res_method,
             "export_feat_layers": export_feat_layers,
             "align_to_input_ext_scale": align_to_input_ext_scale,
-            "use_ray_pose": use_ray_pose,
             "conf_thresh_percentile": conf_thresh_percentile,
             "num_max_points": num_max_points,
             "show_cameras": show_cameras,
@@ -106,7 +117,6 @@ class InferenceService:
         extrinsics: Optional[np.ndarray] = None,
         intrinsics: Optional[np.ndarray] = None,
         align_to_input_ext_scale: bool = True,
-        use_ray_pose: bool = False,
         conf_thresh_percentile: float = 40.0,
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
@@ -129,7 +139,6 @@ class InferenceService:
             "process_res_method": process_res_method,
             "export_feat_layers": export_feat_layers,
             "align_to_input_ext_scale": align_to_input_ext_scale,
-            "use_ray_pose": use_ray_pose,
             "conf_thresh_percentile": conf_thresh_percentile,
             "num_max_points": num_max_points,
             "show_cameras": show_cameras,
@@ -177,6 +186,8 @@ def run_inference(
     export_dir: str,
     model_dir: str,
     device: str = "cuda",
+    batch_size: Optional[int] = None,
+    mixed_precision: Optional[Union[bool, str]] = None,
     backend_url: Optional[str] = None,
     export_format: str = "mini_npz-glb",
     process_res: int = 504,
@@ -185,7 +196,6 @@ def run_inference(
     extrinsics: Optional[np.ndarray] = None,
     intrinsics: Optional[np.ndarray] = None,
     align_to_input_ext_scale: bool = True,
-    use_ray_pose: bool = False,
     conf_thresh_percentile: float = 40.0,
     num_max_points: int = 1_000_000,
     show_cameras: bool = True,
@@ -193,7 +203,12 @@ def run_inference(
 ) -> Union[Any, Dict[str, Any]]:
     """Unified inference interface"""
 
-    service = InferenceService(model_dir, device)
+    service = InferenceService(
+        model_dir,
+        device,
+        batch_size=batch_size,
+        mixed_precision=mixed_precision,
+    )
 
     if backend_url:
         return service.run_backend_inference(
@@ -207,7 +222,6 @@ def run_inference(
             extrinsics=extrinsics,
             intrinsics=intrinsics,
             align_to_input_ext_scale=align_to_input_ext_scale,
-            use_ray_pose=use_ray_pose,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
@@ -224,7 +238,6 @@ def run_inference(
             extrinsics=extrinsics,
             intrinsics=intrinsics,
             align_to_input_ext_scale=align_to_input_ext_scale,
-            use_ray_pose=use_ray_pose,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
             show_cameras=show_cameras,
