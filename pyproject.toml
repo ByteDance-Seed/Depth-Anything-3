@@ -16,6 +16,7 @@ dependencies = [
     "trimesh",
     "torch>=2",
     "torchvision",
+    "kornia>=0.7.0",
     "einops",
     "huggingface_hub",
     "imageio",
