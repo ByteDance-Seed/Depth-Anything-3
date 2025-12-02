@@ -264,15 +264,19 @@ def main():
         device_name = "cuda"
         device_info = torch.cuda.get_device_name(0)
         print(f"✓ GPU Device: {device_info}")
+        print("✓ GPU preprocessing: ENABLED (NVJPEG + Kornia)")
     elif torch.backends.mps.is_available():
         device_name = "mps"
         device_info = "Apple MPS"
         print(f"✓ GPU Device: {device_info}")
+        print("ℹ GPU preprocessing: DISABLED on MPS (CPU is faster on Apple Silicon)")
+        print("  → GPUInputProcessor will use CPU path automatically")
+        print("  → GPU reserved for model inference (5-10x speedup there)")
     else:
         print("✗ No GPU available - benchmark will show CPU vs CPU (no speedup expected)")
         device_name = "cpu"
         device_info = "CPU only"
-    
+
     device = torch.device(device_name)
 
     # Create processors

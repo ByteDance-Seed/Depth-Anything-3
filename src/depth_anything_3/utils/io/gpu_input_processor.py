@@ -59,18 +59,33 @@ class GPUInputProcessor(InputProcessor):
         Args:
             device: Target device ('cuda', 'mps', 'cpu', or None for auto-detect).
                    If None, uses cuda if available, else mps if available, else cpu.
+
+        Note:
+            On MPS (Apple Silicon), GPU preprocessing is automatically disabled because
+            CPU preprocessing is faster due to optimized OpenCV/Accelerate routines.
+            The GPU will still be used for model inference where it provides real gains.
         """
         super().__init__()
         self._device = self._resolve_device(device)
-        self._use_gpu = self._device.type in ("cuda", "mps")
 
-        if not self._use_gpu:
+        # MPS: Force CPU preprocessing (benchmarks show CPU is faster on Apple Silicon)
+        # The overhead of MPS kernel launches + synchronization exceeds the benefit.
+        # GPU should be reserved for model inference where it provides 5-10x speedup.
+        if self._device.type == "mps":
+            self._use_gpu = False
+            logger.info(
+                "MPS detected: GPU preprocessing disabled (CPU is faster on Apple Silicon). "
+                "GPU will be used for model inference only."
+            )
+        elif self._device.type == "cuda":
+            self._use_gpu = True
+            logger.info(f"GPUInputProcessor initialized with device=cuda (NVJPEG enabled)")
+        else:
+            self._use_gpu = False
             logger.warn(
                 f"GPUInputProcessor initialized with device={self._device.type}. "
                 "GPU preprocessing disabled. Consider using InputProcessor instead."
             )
-        else:
-            logger.info(f"GPUInputProcessor initialized with device={self._device.type}")
 
         # Pre-create Kornia normalize transform on GPU
         if self._use_gpu:
