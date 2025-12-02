@@ -7,7 +7,7 @@ huggingface_hub
 imageio
 numpy<2
 opencv-python
-xformers; sys_platform=="darwin"
+xformers; platform_system!='Darwin'
 open3d
 fastapi
 uvicorn
