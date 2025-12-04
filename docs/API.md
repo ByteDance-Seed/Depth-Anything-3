@@ -131,7 +131,7 @@ The main API class that provides depth estimation capabilities with optional pos
 #### 🎯 Initialization
 
 ```python
-from depth_anything_3 import DepthAnything3
+from depth_anything_3.api import DepthAnything3
 
 # Initialize the model with a model name
 model = DepthAnything3(model_name="da3-large")
