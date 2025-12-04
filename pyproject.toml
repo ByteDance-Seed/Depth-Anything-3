@@ -7,7 +7,7 @@ name = "depth-anything-3"
 version = "0.0.0"
 description = "Depth Anything 3"
 readme = "README.md"
-requires-python = ">=3.9, <=3.13"
+requires-python = ">=3.10, <=3.13"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Your Name" }]
 
@@ -68,6 +68,9 @@ include = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.uv]
+extra-build-dependencies = { gsplat = ["torch"] }
 
 [tool.mypy]
 plugins = ["jaxtyping.mypy_plugin"]
