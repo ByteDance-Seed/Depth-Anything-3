@@ -185,8 +185,8 @@ class DualDPT(nn.Module):
             out_dict = {k: v.reshape(B, S, *v.shape[1:]) for k, v in out_dict.items()}
             return Dict(out_dict)
         out_dicts = []
-        for s0 in range(0, S, chunk_size):
-            s1 = min(s0 + chunk_size, S)
+        for s0 in range(0, B * S, chunk_size):
+            s1 = min(s0 + chunk_size, B * S)
             out_dict = self._forward_impl(
                 [feat[s0:s1] for feat in feats],
                 H,
