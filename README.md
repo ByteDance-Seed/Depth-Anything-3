@@ -86,6 +86,7 @@ We introduce a new benchmark to rigorously evaluate geometry prediction models o
 ### 📦 Installation
 
 ```bash
+conda install cxx-compiler=1.2.0 #gcc9.3.0 and g++9.3.0, to avoid errors building gsplat
 pip install xformers torch\>=2 torchvision
 pip install -e . # Basic
 pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70 # for gaussian head
