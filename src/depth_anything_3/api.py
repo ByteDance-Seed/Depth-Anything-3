@@ -28,6 +28,7 @@ import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin
 from PIL import Image
 
+from depth_anything_3.cache import get_model_cache
 from depth_anything_3.cfg import create_object, load_config
 from depth_anything_3.registry import MODEL_REGISTRY
 from depth_anything_3.specs import Prediction
@@ -72,29 +73,64 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
     _commit_hash: str | None = None  # Set by mixin when loading from Hub
 
-    def __init__(self, model_name: str = "da3-large", **kwargs):
+    def __init__(self, model_name: str = "da3-large", device: str | torch.device | None = None, use_cache: bool = True, **kwargs):
         """
         Initialize DepthAnything3 with specified preset.
 
         Args:
-        model_name: The name of the model preset to use.
-                    Examples: 'da3-giant', 'da3-large', 'da3metric-large', 'da3nested-giant-large'.
-        **kwargs: Additional keyword arguments (currently unused).
+            model_name: The name of the model preset to use.
+                        Examples: 'da3-giant', 'da3-large', 'da3metric-large', 'da3nested-giant-large'.
+            device: Target device ('cuda', 'mps', 'cpu'). If None, auto-detect.
+            use_cache: Whether to use model caching (default: True).
+                      Set to False to force reload model from disk.
+            **kwargs: Additional keyword arguments (currently unused).
         """
         super().__init__()
         self.model_name = model_name
+        self.use_cache = use_cache
 
-        # Build the underlying network
+        # Determine device
+        if device is None:
+            device = self._auto_detect_device()
+        self.device = torch.device(device) if isinstance(device, str) else device
+
+        # Load model configuration
         self.config = load_config(MODEL_REGISTRY[self.model_name])
-        self.model = create_object(self.config)
+
+        # Build or retrieve model from cache
+        if use_cache:
+            cache = get_model_cache()
+            self.model = cache.get(
+                model_name=self.model_name,
+                device=self.device,
+                loader_fn=lambda: self._create_model()
+            )
+        else:
+            logger.info(f"Model cache disabled, loading {self.model_name} from disk")
+            self.model = self._create_model()
+
+        # Ensure model is on correct device and in eval mode
+        self.model = self.model.to(self.device)
         self.model.eval()
 
         # Initialize processors
         self.input_processor = InputProcessor()
         self.output_processor = OutputProcessor()
 
-        # Device management (set by user)
-        self.device = None
+    def _auto_detect_device(self) -> torch.device:
+        """Auto-detect best available device."""
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        else:
+            return torch.device("cpu")
+
+    def _create_model(self) -> nn.Module:
+        """Create and return new model instance."""
+        model = create_object(self.config)
+        model.eval()
+        return model
 
     @torch.inference_mode()
     def forward(
@@ -304,20 +340,33 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         extrinsics: torch.Tensor | None,
         intrinsics: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-        """Prepare tensors for model input."""
+        """
+        Prepare tensors for model input with optimized device transfer.
+
+        Uses non_blocking=True for async CPU→GPU transfers, which overlaps
+        data transfer with compute when possible.
+        """
         device = self._get_model_device()
 
-        # Move images to model device
+        # Pin memory for faster CPU→GPU transfer (CUDA only)
+        if device.type == "cuda" and imgs_cpu.device.type == "cpu":
+            imgs_cpu = imgs_cpu.pin_memory()
+
+        # Move images to model device with non-blocking transfer
         imgs = imgs_cpu.to(device, non_blocking=True)[None].float()
 
-        # Convert camera parameters to tensors
+        # Convert camera parameters to tensors with non-blocking transfer
         ex_t = (
-            extrinsics.to(device, non_blocking=True)[None].float()
+            extrinsics.pin_memory().to(device, non_blocking=True)[None].float()
+            if extrinsics is not None and device.type == "cuda"
+            else extrinsics.to(device, non_blocking=True)[None].float()
             if extrinsics is not None
             else None
         )
         in_t = (
-            intrinsics.to(device, non_blocking=True)[None].float()
+            intrinsics.pin_memory().to(device, non_blocking=True)[None].float()
+            if intrinsics is not None and device.type == "cuda"
+            else intrinsics.to(device, non_blocking=True)[None].float()
             if intrinsics is not None
             else None
         )
