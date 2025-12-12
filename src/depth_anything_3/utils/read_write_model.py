@@ -505,6 +505,43 @@ def write_model(cameras, images, points3D, path, ext=".bin"):
     return cameras, images, points3D
 
 
+def extract_intrinsics_extrinsics_from_colmap(cameras: dict, images: dict) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Extract intrinsics (N, 3, 3) and extrinsics (N, 4, 4) from COLMAP cameras and images dicts.
+
+    Assumes PINHOLE model for simplicity; extend for other models as needed.
+    Extrinsics are w2c (world-to-camera).
+    """
+    intrinsics_list = []
+    extrinsics_list = []
+
+    for img_id, img in images.items():
+        cam = cameras[img.camera_id]
+        # Intrinsics (assume PINHOLE: params = [fx, fy, cx, cy])
+        fx, fy, cx, cy = cam.params
+        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+        intrinsics_list.append(K)
+
+        # Extrinsics: R (from qvec) and tvec form w2c
+        R = qvec2rotmat(img.qvec)
+        t = img.tvec
+        w2c = np.eye(4)
+        w2c[:3, :3] = R
+        w2c[:3, 3] = t
+        extrinsics_list.append(w2c)
+
+    return np.array(intrinsics_list), np.array(extrinsics_list)
+
+
+def get_image_paths(images, colmap_path):
+    """
+    Get full paths to images based on COLMAP structure.
+    Assumes images are in ../images/ relative to the sparse model directory.
+    """
+    images_dir = os.path.join(os.path.dirname(os.path.dirname(colmap_path)), "images")
+    return [os.path.join(images_dir, img.name) for img in images.values()]
+
+
 def qvec2rotmat(qvec):
     return np.array(
         [
