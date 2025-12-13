@@ -25,6 +25,8 @@ import os
 import re
 from typing import Dict as TDict, List, Optional
 
+import numpy as np
+
 
 # ANSI color codes for terminal output
 class Colors:
@@ -103,7 +105,8 @@ class MetricsPrinter:
     """
 
     # Metrics where lower values are better
-    LOWER_IS_BETTER = {"comp", "acc", "overall", "error", "loss", "rmse", "mae"}
+    # Add "rel" so abs_rel / points_rel / depth_rel etc. are colorized correctly.
+    LOWER_IS_BETTER = {"comp", "acc", "overall", "error", "loss", "rmse", "mae", "rel"}
 
     def __init__(self, use_color: bool = True):
         """
@@ -452,6 +455,63 @@ class MetricsPrinter:
             row += f"{fmt_val(val):<{col_width}}"
         print(row)
 
+        # ============ DEPTH METRICS ============
+        print(f"\n{Colors.BOLD_MAGENTA}📏 DEPTH ESTIMATION{Colors.RESET}")
+        depth_datasets = ["hiroom", "eth3d", "7scenes", "scannetpp"]
+
+        # Depth evaluation overview (MoGe-2 / MapAnything conventions):
+        #   - Scale-invariant (median-aligned) depth: evaluates shape up-to-scale.
+        #   - Affine-invariant depth: evaluates shape up-to-(scale+shift) (depth or disparity).
+        #   - Metric depth: evaluates absolute depth in meters (no alignment).
+        #   - Metric scale / coverage: reports global scale error and eval mask coverage.
+        depth_rows = [
+            # ---- scale-invariant (median-aligned) depth ----
+            ("Scale-inv AbsRel (med)", "rel_depth", "abs_rel_scale_med"),
+            ("Scale-inv δ@1.03 (med)", "rel_depth", "delta_1.03_scale_med"),
+            ("Scale-inv δ@1.25 (med)", "rel_depth", "delta_1.25_scale_med"),
+
+            # ---- affine-invariant depth (scale+shift) ----
+            ("Affine-inv AbsRel (depth)", "rel_depth", "abs_rel_affine_depth"),
+            ("Affine-inv δ@1.03 (depth)", "rel_depth", "delta_1.03_affine_depth"),
+            ("Affine-inv δ@1.25 (depth)", "rel_depth", "delta_1.25_affine_depth"),
+            ("Affine-inv AbsRel (disp)", "rel_depth", "abs_rel_affine_disp"),
+            ("Affine-inv δ@1.03 (disp)", "rel_depth", "delta_1.03_affine_disp"),
+            ("Affine-inv δ@1.25 (disp)", "rel_depth", "delta_1.25_affine_disp"),
+
+            # ---- metric depth (no alignment) ----
+            ("Metric AbsRel", "metric_depth", "abs_rel"),
+            ("Metric δ@1.03", "metric_depth", "delta_1.03"),
+            ("Metric δ@1.25", "metric_depth", "delta_1.25"),
+
+            # ---- metric scale + coverage ----
+            ("Median scale (s)", "metric_depth", "scale_med"),
+            ("Metric scale rel", "metric_depth", "metric_scale_rel"),
+            ("Valid pixels (%)", "metric_depth", "valid_pixels_pct"),
+        ]
+
+        metric_width = max(24, max(len(r[0]) for r in depth_rows) + 2)
+        header = f"{'Metric':<{metric_width}}{'Avg':<{col_width}}"
+        for ds in depth_datasets:
+            if ds in DATASET_DISPLAY:
+                header += f"{DATASET_DISPLAY[ds]:<{col_width}}"
+        print("-" * len(strip_ansi(header)))
+        print(f"{Colors.BOLD}{header}{Colors.RESET}")
+        print("-" * len(strip_ansi(header)))
+
+        # Average computed over available datasets (ignoring N/A).
+        for ridx, (label, mode, metric_name) in enumerate(depth_rows):
+            values = [get_metric(ds, mode, metric_name) for ds in depth_datasets]
+            valid_vals = [v for v in values if v is not None]
+            avg = float(np.mean(valid_vals)) if valid_vals else None
+
+            row = f"{label:<{metric_width}}{fmt_val(avg):<{col_width}}"
+            for v in values:
+                row += f"{fmt_val(v):<{col_width}}"
+            print(row)
+            # Visually separate depth metric groups.
+            if ridx in (2, 8, 11):
+                print("-" * len(strip_ansi(header)))
+
         # ============ RECON_UNPOSED METRICS ============
         print(f"\n{Colors.BOLD_MAGENTA}🏗️  RECON_UNPOSED (Pred Pose){Colors.RESET}")
         
@@ -615,4 +675,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
