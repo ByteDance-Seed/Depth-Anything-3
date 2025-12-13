@@ -34,7 +34,8 @@ eval:
     - dtu64
 
   # Evaluation modes
-  # Options: pose, recon_unposed, recon_posed, view_syn
+  # Options: pose, recon_unposed, recon_posed, view_syn, rel_depth, metric_depth
+  # modes: [pose, recon_unposed, recon_posed, rel_depth, metric_depth]
   modes:
     - pose
     - recon_unposed
@@ -95,4 +96,3 @@ presets:
     datasets: [eth3d]
     modes: [pose, recon_unposed]
     scenes: [courtyard]
-
