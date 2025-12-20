@@ -385,7 +385,7 @@ class DinoVisionTransformer(nn.Module):
         elif outputs[0][1].shape[-1] == (self.embed_dim * 2):
             outputs = [
                 torch.cat(
-                    [out[1][..., : self.embed_dim], self.norm(out[1][..., self.embed_dim :])],
+                    [self.norm(out[1][..., : self.embed_dim]), self.norm(out[1][..., self.embed_dim :])],
                     dim=-1,
                 )
                 for out in outputs
