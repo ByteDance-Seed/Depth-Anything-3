@@ -345,7 +345,11 @@ class DinoVisionTransformer(nn.Module):
                     out_x = restore_original_order(out_x, b_idx)
                 output.append((out_x[:, :, 0], out_x))
             if i in export_feat_layers:
-                aux_output.append(x)
+                # Apply the same restoration logic to auxiliary features to align with input view order
+                aux_x = x.clone()
+                if x.shape[1] >= THRESH_FOR_REF_SELECTION and self.alt_start != -1 and 'b_idx' in locals():
+                    aux_x = restore_original_order(aux_x, b_idx)
+                aux_output.append(aux_x)
         return output, aux_output
 
     def process_attention(self, x, block, attn_type="global", pos=None, attn_mask=None):
