@@ -20,6 +20,7 @@ from .depth_vis import export_to_depth_vis
 from .feat_vis import export_to_feat_vis
 from .glb import export_to_glb
 from .npz import export_to_mini_npz, export_to_npz
+from .npy import export_to_mini_npy, export_to_npy
 
 
 def export(
@@ -40,6 +41,10 @@ def export(
         export_to_mini_npz(prediction, export_dir)
     elif export_format == "npz":
         export_to_npz(prediction, export_dir)
+    elif export_format == "mini_npy":
+        export_to_mini_npy(prediction, export_dir)
+    elif export_format == "npy":
+        export_to_npy(prediction, export_dir)
     elif export_format == "feat_vis":
         export_to_feat_vis(prediction, export_dir, **kwargs.get(export_format, {}))
     elif export_format == "depth_vis":
