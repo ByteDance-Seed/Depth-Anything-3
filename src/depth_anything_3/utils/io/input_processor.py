@@ -56,11 +56,13 @@ class InputProcessor:
       - Order of outputs matches the input order.
     """
 
-    NORMALIZE = T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
     PATCH_SIZE = 14
 
     def __init__(self):
-        pass
+        self._normalize_image = T.Compose([
+            T.ToTensor(),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
 
     # -----------------------------
     # Public API
@@ -312,10 +314,6 @@ class InputProcessor:
             return img.convert("RGB")
         else:
             raise ValueError(f"Unsupported image type: {type(img)}")
-
-    def _normalize_image(self, img: Image.Image) -> torch.Tensor:
-        img_tensor = T.ToTensor()(img)
-        return self.NORMALIZE(img_tensor)
 
     # -----------------------------
     # Boundary resizing
