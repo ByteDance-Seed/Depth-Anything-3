@@ -63,8 +63,8 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         # Load from Hugging Face Hub
         model = DepthAnything3.from_pretrained("huggingface/model-name")
 
-        # Or create with specific preset
-        model = DepthAnything3(preset="vitg")
+        # Or create with a specific model from a predefined config
+        model = DepthAnything3(model_name="da3-large")
 
         # Run inference
         prediction = model.inference(images, export_dir="output", export_format="glb")
