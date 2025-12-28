@@ -31,6 +31,9 @@ from PIL import Image
 from depth_anything_3.utils.logger import logger
 from depth_anything_3.utils.parallel_utils import parallel_execution
 
+IMAGENET_MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
+IMAGENET_STD: tuple[float, float, float] = (0.229, 0.224, 0.225)
+
 
 class InputProcessor:
     """Prepares a batch of images for model inference.
@@ -53,7 +56,7 @@ class InputProcessor:
       - Order of outputs matches the input order.
     """
 
-    NORMALIZE = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    NORMALIZE = T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
     PATCH_SIZE = 14
 
     def __init__(self):
@@ -114,11 +117,12 @@ class InputProcessor:
     # -----------------------------
     # __call__ helpers
     # -----------------------------
-    def _resolve_sequential(self, sequential: bool | None, num_workers: int) -> bool:
+    @staticmethod
+    def _resolve_sequential(sequential: bool | None, num_workers: int) -> bool:
         return (num_workers <= 1) if sequential is None else sequential
 
+    @staticmethod
     def _validate_and_pack_meta(
-        self,
         images: list[np.ndarray | Image.Image | str],
         extrinsics: np.ndarray | None,
         intrinsics: np.ndarray | None,
@@ -162,7 +166,8 @@ class InputProcessor:
             )
         return results
 
-    def _unpack_results(self, results):
+    @staticmethod
+    def _unpack_results(results):
         """
         results: List[Tuple[torch.Tensor, Tuple[H, W], Optional[np.ndarray], Optional[np.ndarray]]]
         -> processed_images, out_sizes, out_intrinsics, out_extrinsics
@@ -177,8 +182,8 @@ class InputProcessor:
 
         return list(processed_images), list(out_sizes), list(out_intrinsics), list(out_extrinsics)
 
+    @staticmethod
     def _unify_batch_shapes(
-        self,
         processed_images: list[torch.Tensor],
         out_sizes: list[tuple[int, int]],
         out_intrinsics: list[np.ndarray | None],
@@ -210,6 +215,7 @@ class InputProcessor:
                 new_ixts.append(K_adj)
         return new_imgs, new_sizes, new_ixts
 
+    @staticmethod
     def _stack_batch(self, processed_images: list[torch.Tensor]) -> torch.Tensor:
         return torch.stack(processed_images)
 
@@ -259,8 +265,8 @@ class InputProcessor:
     # -----------------------------
     # Intrinsics transforms
     # -----------------------------
+    @staticmethod
     def _resize_ixt(
-        self,
         intrinsic: np.ndarray | None,
         orig_w: int,
         orig_h: int,
@@ -275,8 +281,8 @@ class InputProcessor:
         K[1:2] *= h / float(orig_h)
         return K
 
+    @staticmethod
     def _crop_ixt(
-        self,
         intrinsic: np.ndarray | None,
         orig_w: int,
         orig_h: int,
@@ -295,6 +301,7 @@ class InputProcessor:
     # -----------------------------
     # I/O & normalization
     # -----------------------------
+    @staticmethod
     def _load_image(self, img: np.ndarray | Image.Image | str) -> Image.Image:
         if isinstance(img, str):
             return Image.open(img).convert("RGB")
@@ -321,6 +328,7 @@ class InputProcessor:
         else:
             raise ValueError(f"Unsupported resize method: {method}")
 
+    @staticmethod
     def _resize_longest_side(self, img: Image.Image, target_size: int) -> Image.Image:
         w, h = img.size
         longest = max(w, h)
@@ -333,7 +341,8 @@ class InputProcessor:
         arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
         return Image.fromarray(arr)
 
-    def _resize_shortest_side(self, img: Image.Image, target_size: int) -> Image.Image:
+    @staticmethod
+    def _resize_shortest_side(img: Image.Image, target_size: int) -> Image.Image:
         w, h = img.size
         shortest = min(w, h)
         if shortest == target_size:
@@ -348,7 +357,8 @@ class InputProcessor:
     # -----------------------------
     # Make divisible by PATCH_SIZE
     # -----------------------------
-    def _make_divisible_by_crop(self, img: Image.Image, patch: int) -> Image.Image:
+    @staticmethod
+    def _make_divisible_by_crop(img: Image.Image, patch: int) -> Image.Image:
         """
         Floor each dimension to the nearest multiple of PATCH_SIZE via center crop.
         Example: 504x377 -> 504x364
@@ -362,7 +372,8 @@ class InputProcessor:
         top = (h - new_h) // 2
         return img.crop((left, top, left + new_w, top + new_h))
 
-    def _make_divisible_by_resize(self, img: Image.Image, patch: int) -> Image.Image:
+    @staticmethod
+    def _make_divisible_by_resize(img: Image.Image, patch: int) -> Image.Image:
         """
         Round each dimension to nearest multiple of PATCH_SIZE via small resize.
         """
