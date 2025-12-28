@@ -26,6 +26,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.transforms as T
 from PIL import Image
 
@@ -76,7 +77,45 @@ def _unify_batch_shapes(
         return new_imgs, new_masks, new_sizes, new_ixts
 
     if mode == "pad":
-        raise NotImplementedError("Padding batch mode is not implemented yet.")
+        max_h = max(h for h, _ in out_sizes)
+        max_w = max(w for _, w in out_sizes)
+        logger.info(
+            f"Images in batch have different sizes {out_sizes}; "
+            f"padding all to largest ({max_h},{max_w})"
+        )
+
+        new_imgs, new_masks, new_sizes, new_ixts = [], [], [], []
+        for img_t, m_t, (H, W), K in zip(processed_images, alpha_masks, out_sizes, out_intrinsics):
+            horizontal_padding = (max_w - W) //2
+            vertical_padding = (max_h - H) //2
+
+            padded_im = F.pad(
+                img_t,
+                pad=(horizontal_padding, horizontal_padding, vertical_padding, vertical_padding),
+                mode='constant',
+                value=0,
+            )
+
+            padded_mask = F.pad(
+                m_t,
+                pad=(horizontal_padding, horizontal_padding, vertical_padding, vertical_padding),
+                mode='constant',
+                value=0,
+            )
+
+            new_imgs.append(padded_im)
+            new_masks.append(padded_mask)
+            new_sizes.append((max_h, max_w))
+
+            if K is None:
+                new_ixts.append(None)
+            else:
+                K_adj = K.copy()
+                K_adj[0, 2] = max_w
+                K_adj[1, 2] = max_h
+                new_ixts.append(K_adj)
+
+        return new_imgs, new_masks, new_sizes, new_ixts
 
     raise ValueError(f"Unknown batch mode: {mode}")
 
