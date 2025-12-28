@@ -39,41 +39,46 @@ IMAGENET_STD: tuple[float, float, float] = (0.229, 0.224, 0.225)
 # -----------------------------
 # __call__ helpers
 # -----------------------------
-def _stack_batch(processed_images: list[torch.Tensor]) -> torch.Tensor:
-    return torch.stack(processed_images)
-
-
 def _unify_batch_shapes(
     processed_images: list[torch.Tensor],
+    alpha_masks: list[torch.Tensor],
     out_sizes: list[tuple[int, int]],
     out_intrinsics: list[np.ndarray | None],
-) -> tuple[list[torch.Tensor], list[tuple[int, int]], list[np.ndarray | None]]:
+    mode: str="center_crop",
+) -> tuple[list[torch.Tensor], list[torch.Tensor], list[tuple[int, int]], list[np.ndarray | None]]:
     """Center-crop all tensors to the smallest H, W; adjust intrinsics' cx, cy accordingly."""
     if len(set(out_sizes)) <= 1:
-        return processed_images, out_sizes, out_intrinsics
+        return processed_images, alpha_masks, out_sizes, out_intrinsics
 
-    min_h = min(h for h, _ in out_sizes)
-    min_w = min(w for _, w in out_sizes)
-    logger.warn(
-        f"Images in batch have different sizes {out_sizes}; "
-        f"center-cropping all to smallest ({min_h},{min_w})"
-    )
+    if mode == "center_crop":
+        min_h = min(h for h, _ in out_sizes)
+        min_w = min(w for _, w in out_sizes)
+        logger.info(
+            f"Images in batch have different sizes {out_sizes}; "
+            f"center-cropping all to smallest ({min_h},{min_w})"
+        )
 
-    center_crop = T.CenterCrop((min_h, min_w))
-    new_imgs, new_sizes, new_ixts = [], [], []
-    for img_t, (H, W), K in zip(processed_images, out_sizes, out_intrinsics):
-        crop_top = max(0, (H - min_h) // 2)
-        crop_left = max(0, (W - min_w) // 2)
-        new_imgs.append(center_crop(img_t))
-        new_sizes.append((min_h, min_w))
-        if K is None:
-            new_ixts.append(None)
-        else:
-            K_adj = K.copy()
-            K_adj[0, 2] -= crop_left
-            K_adj[1, 2] -= crop_top
-            new_ixts.append(K_adj)
-    return new_imgs, new_sizes, new_ixts
+        center_crop = T.CenterCrop((min_h, min_w))
+        new_imgs, new_masks, new_sizes, new_ixts = [], [], [], []
+        for img_t, m_t, (H, W), K in zip(processed_images, alpha_masks, out_sizes, out_intrinsics):
+            crop_top = max(0, (H - min_h) // 2)
+            crop_left = max(0, (W - min_w) // 2)
+            new_imgs.append(center_crop(img_t))
+            new_masks.append(center_crop(m_t))
+            new_sizes.append((min_h, min_w))
+            if K is None:
+                new_ixts.append(None)
+            else:
+                K_adj = K.copy()
+                K_adj[0, 2] -= crop_left
+                K_adj[1, 2] -= crop_top
+                new_ixts.append(K_adj)
+        return new_imgs, new_masks, new_sizes, new_ixts
+
+    if mode == "pad":
+        raise NotImplementedError("Padding batch mode is not implemented yet.")
+
+    raise ValueError(f"Unknown batch mode: {mode}")
 
 
 def _unpack_results(results):
@@ -316,12 +321,13 @@ class InputProcessor:
         process_res: int = 504,
         process_res_method: str = "upper_bound_resize",
         alpha_blend_method: str = "mean",
+        batch_method: str = "center_crop",
         *,
         num_workers: int = 8,
         print_progress: bool = False,
         sequential: bool | None = None,
         desc: str | None = "Preprocess",
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """
         Returns:
             (tensor, extrinsics_list, intrinsics_list)
@@ -344,9 +350,22 @@ class InputProcessor:
         )
 
         proc_imgs, alpha_masks, out_sizes, out_ixts, out_exts = _unpack_results(results)
-        proc_imgs, out_sizes, out_ixts = _unify_batch_shapes(proc_imgs, out_sizes, out_ixts)
 
-        batch_tensor = _stack_batch(proc_imgs)
+        (
+            proc_imgs,
+            alpha_masks,
+            out_sizes,
+            out_ixts,
+        ) = _unify_batch_shapes(
+            processed_images=proc_imgs,
+            alpha_masks=alpha_masks,
+            out_sizes=out_sizes,
+            out_intrinsics=out_ixts,
+            mode=batch_method,
+        )
+
+        batched_images = torch.stack(proc_imgs)
+        batched_masks = torch.stack(alpha_masks)
         out_exts = (
             torch.from_numpy(np.asarray(out_exts)).float()
             if out_exts is not None and out_exts[0] is not None
@@ -357,7 +376,7 @@ class InputProcessor:
             if out_ixts is not None and out_ixts[0] is not None
             else None
         )
-        return batch_tensor, out_exts, out_ixts
+        return batched_images, batched_masks, out_exts, out_ixts
 
     # -----------------------------
     # __call__ helpers
