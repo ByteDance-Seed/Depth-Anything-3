@@ -82,14 +82,20 @@ def _unpack_results(results):
     -> processed_images, out_sizes, out_intrinsics, out_extrinsics
     """
     try:
-        processed_images, out_sizes, out_intrinsics, out_extrinsics = zip(*results)
+        processed_images, alpha_masks, out_sizes, out_intrinsics, out_extrinsics = zip(*results)
     except Exception as e:
         raise RuntimeError(
             "Unexpected results structure from parallel_execution: "
             f"{type(results)} / sample: {results[0]}"
         ) from e
 
-    return list(processed_images), list(out_sizes), list(out_intrinsics), list(out_extrinsics)
+    return (
+        list(processed_images),
+        list(alpha_masks),
+        list(out_sizes),
+        list(out_intrinsics),
+        list(out_extrinsics),
+    )
 
 
 def _validate_and_pack_meta(
@@ -151,12 +157,12 @@ def _resize_ixt(
 # -----------------------------
 def _load_image(img: np.ndarray | Image.Image | str) -> Image.Image:
     if isinstance(img, str):
-        return Image.open(img).convert("RGB")
+        return Image.open(img).convert("RGBA")
     elif isinstance(img, np.ndarray):
         # Assume HxWxC uint8/RGB
-        return Image.fromarray(img).convert("RGB")
+        return Image.fromarray(img).convert("RGBA")
     elif isinstance(img, Image.Image):
-        return img.convert("RGB")
+        return img.convert("RGBA")
     else:
         raise ValueError(f"Unsupported image type: {type(img)}")
 
@@ -238,6 +244,40 @@ def _make_divisible_by_crop(img: Image.Image, patch: int) -> Image.Image:
     return img.crop((left, top, left + new_w, top + new_h))
 
 
+def _alpha_blend(
+    rgb_tensor: torch.Tensor,
+    alpha_mask: torch.Tensor,
+    blend_method: str = "keep",
+) -> torch.Tensor:
+    """
+    Blend RGB tensor with alpha mask based on specified method.
+
+    Args:
+        rgb_tensor (torch.Tensor): RGB image tensor of shape (C, H, W).
+        alpha_mask (torch.Tensor): Alpha mask tensor of shape (H, W).
+        blend_method (str, optional): Blending method: "keep", "black", "white", "mean".
+            Defaults to "keep".
+
+    Returns:
+        torch.Tensor: Blended RGB image tensor.
+    """
+    if blend_method == "keep":
+        return rgb_tensor
+
+    if blend_method == "black":
+        return rgb_tensor * alpha_mask[None, ...]
+
+    if blend_method == "white":
+        white_bg = torch.ones_like(rgb_tensor)
+        return rgb_tensor * alpha_mask[None, ...] + (1 - alpha_mask[None, ...]) * white_bg
+
+    if blend_method == "mean":
+        mean_bg = torch.ones_like(rgb_tensor) * rgb_tensor.new_tensor(IMAGENET_MEAN)[:, None, None]
+        return rgb_tensor * alpha_mask[None, ...] + (1 - alpha_mask[None, ...]) * mean_bg
+
+    raise ValueError(f"Unknown blend method: {blend_method}")
+
+
 class InputProcessor:
     """Prepares a batch of images for model inference.
     This processor converts a list of image file paths into a single, model-ready
@@ -262,10 +302,8 @@ class InputProcessor:
     PATCH_SIZE = 14
 
     def __init__(self):
-        self._normalize_image = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        ])
+        self._to_tensor = T.ToTensor()
+        self._normalize_image = T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 
     # -----------------------------
     # Public API
@@ -277,6 +315,7 @@ class InputProcessor:
         intrinsics: np.ndarray | None = None,
         process_res: int = 504,
         process_res_method: str = "upper_bound_resize",
+        alpha_blend_method: str = "mean",
         *,
         num_workers: int = 8,
         print_progress: bool = False,
@@ -301,9 +340,10 @@ class InputProcessor:
             print_progress=print_progress,
             sequential=sequential,
             desc=desc,
+            blend_method=alpha_blend_method,
         )
 
-        proc_imgs, out_sizes, out_ixts, out_exts = _unpack_results(results)
+        proc_imgs, alpha_masks, out_sizes, out_ixts, out_exts = _unpack_results(results)
         proc_imgs, out_sizes, out_ixts = _unify_batch_shapes(proc_imgs, out_sizes, out_ixts)
 
         batch_tensor = _stack_batch(proc_imgs)
@@ -334,6 +374,7 @@ class InputProcessor:
         print_progress: bool,
         sequential: bool,
         desc: str | None,
+        blend_method: str,
     ):
         results = parallel_execution(
             image,
@@ -346,6 +387,7 @@ class InputProcessor:
             desc=desc,
             process_res=process_res,
             process_res_method=process_res_method,
+            blend_method=blend_method,
         )
         if not results:
             raise RuntimeError(
@@ -364,7 +406,8 @@ class InputProcessor:
         *,
         process_res: int,
         process_res_method: str,
-    ) -> tuple[torch.Tensor, tuple[int, int], np.ndarray | None, np.ndarray | None]:
+        blend_method: str,
+    ) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int], np.ndarray | None, np.ndarray | None]:
         # Load & remember the original size
         pil_img = _load_image(img)
         orig_w, orig_h = pil_img.size
@@ -389,12 +432,19 @@ class InputProcessor:
             raise ValueError(f"Unsupported process_res_method: {process_res_method}")
 
         # Convert to tensor & normalize
-        img_tensor = self._normalize_image(pil_img)
-        _, H, W = img_tensor.shape
+        img_tensor = self._to_tensor(pil_img)
+
+        alpha_mask = img_tensor[-1]
+        rgb_tensor = img_tensor[:-1, ...]
+
+        rgb_tensor = _alpha_blend(rgb_tensor, alpha_mask, blend_method)
+        rgb_tensor = self._normalize_image(rgb_tensor)
+
+        _, H, W = rgb_tensor.shape
         assert (W, H) == (w, h), "Tensor size mismatch with PIL image size after processing."
 
         # Return: (img_tensor, (H, W), intrinsic, extrinsic)
-        return img_tensor, (H, W), intrinsic, extrinsic
+        return rgb_tensor, alpha_mask, (H, W), intrinsic, extrinsic
 
 
 # Backward compatibility alias
