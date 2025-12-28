@@ -22,6 +22,7 @@ In addition, it parallelizes per-image preprocessing using the provided `paralle
 from __future__ import annotations
 
 from typing import Sequence
+
 import cv2
 import numpy as np
 import torch
@@ -33,6 +34,208 @@ from depth_anything_3.utils.parallel_utils import parallel_execution
 
 IMAGENET_MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
 IMAGENET_STD: tuple[float, float, float] = (0.229, 0.224, 0.225)
+
+
+# -----------------------------
+# __call__ helpers
+# -----------------------------
+def _stack_batch(processed_images: list[torch.Tensor]) -> torch.Tensor:
+    return torch.stack(processed_images)
+
+
+def _unify_batch_shapes(
+    processed_images: list[torch.Tensor],
+    out_sizes: list[tuple[int, int]],
+    out_intrinsics: list[np.ndarray | None],
+) -> tuple[list[torch.Tensor], list[tuple[int, int]], list[np.ndarray | None]]:
+    """Center-crop all tensors to the smallest H, W; adjust intrinsics' cx, cy accordingly."""
+    if len(set(out_sizes)) <= 1:
+        return processed_images, out_sizes, out_intrinsics
+
+    min_h = min(h for h, _ in out_sizes)
+    min_w = min(w for _, w in out_sizes)
+    logger.warn(
+        f"Images in batch have different sizes {out_sizes}; "
+        f"center-cropping all to smallest ({min_h},{min_w})"
+    )
+
+    center_crop = T.CenterCrop((min_h, min_w))
+    new_imgs, new_sizes, new_ixts = [], [], []
+    for img_t, (H, W), K in zip(processed_images, out_sizes, out_intrinsics):
+        crop_top = max(0, (H - min_h) // 2)
+        crop_left = max(0, (W - min_w) // 2)
+        new_imgs.append(center_crop(img_t))
+        new_sizes.append((min_h, min_w))
+        if K is None:
+            new_ixts.append(None)
+        else:
+            K_adj = K.copy()
+            K_adj[0, 2] -= crop_left
+            K_adj[1, 2] -= crop_top
+            new_ixts.append(K_adj)
+    return new_imgs, new_sizes, new_ixts
+
+
+def _unpack_results(results):
+    """
+    results: List[Tuple[torch.Tensor, Tuple[H, W], Optional[np.ndarray], Optional[np.ndarray]]]
+    -> processed_images, out_sizes, out_intrinsics, out_extrinsics
+    """
+    try:
+        processed_images, out_sizes, out_intrinsics, out_extrinsics = zip(*results)
+    except Exception as e:
+        raise RuntimeError(
+            "Unexpected results structure from parallel_execution: "
+            f"{type(results)} / sample: {results[0]}"
+        ) from e
+
+    return list(processed_images), list(out_sizes), list(out_intrinsics), list(out_extrinsics)
+
+
+def _validate_and_pack_meta(
+    images: list[np.ndarray | Image.Image | str],
+    extrinsics: np.ndarray | None,
+    intrinsics: np.ndarray | None,
+) -> tuple[list[np.ndarray | None] | None, list[np.ndarray | None] | None]:
+    if extrinsics is not None and len(extrinsics) != len(images):
+        raise ValueError("Length of extrinsics must match images when provided.")
+    if intrinsics is not None and len(intrinsics) != len(images):
+        raise ValueError("Length of intrinsics must match images when provided.")
+    exts_list = [e for e in extrinsics] if extrinsics is not None else None
+    ixts_list = [k for k in intrinsics] if intrinsics is not None else None
+    return exts_list, ixts_list
+
+
+def _resolve_sequential(sequential: bool | None, num_workers: int) -> bool:
+    return (num_workers <= 1) if sequential is None else sequential
+
+
+# -----------------------------
+# Intrinsics transforms
+# -----------------------------
+def _crop_ixt(
+    intrinsic: np.ndarray | None,
+    orig_w: int,
+    orig_h: int,
+    w: int,
+    h: int,
+) -> np.ndarray | None:
+    if intrinsic is None:
+        return None
+    K = intrinsic.copy()
+    crop_h = (orig_h - h) // 2
+    crop_w = (orig_w - w) // 2
+    K[0, 2] -= crop_w
+    K[1, 2] -= crop_h
+    return K
+
+
+def _resize_ixt(
+    intrinsic: np.ndarray | None,
+    orig_w: int,
+    orig_h: int,
+    w: int,
+    h: int,
+) -> np.ndarray | None:
+    if intrinsic is None:
+        return None
+    K = intrinsic.copy()
+    # scale fx, cx by w ratio; fy, cy by h ratio
+    K[:1] *= w / float(orig_w)
+    K[1:2] *= h / float(orig_h)
+    return K
+
+
+# -----------------------------
+# I/O & normalization
+# -----------------------------
+def _load_image(img: np.ndarray | Image.Image | str) -> Image.Image:
+    if isinstance(img, str):
+        return Image.open(img).convert("RGB")
+    elif isinstance(img, np.ndarray):
+        # Assume HxWxC uint8/RGB
+        return Image.fromarray(img).convert("RGB")
+    elif isinstance(img, Image.Image):
+        return img.convert("RGB")
+    else:
+        raise ValueError(f"Unsupported image type: {type(img)}")
+
+
+# -----------------------------
+# Boundary resizing
+# -----------------------------
+def _resize_shortest_side(img: Image.Image, target_size: int) -> Image.Image:
+    w, h = img.size
+    shortest = min(w, h)
+    if shortest == target_size:
+        return img
+    scale = target_size / float(shortest)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+    arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
+    return Image.fromarray(arr)
+
+
+def _resize_longest_side(img: Image.Image, target_size: int) -> Image.Image:
+    w, h = img.size
+    longest = max(w, h)
+    if longest == target_size:
+        return img
+    scale = target_size / float(longest)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+    arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
+    return Image.fromarray(arr)
+
+
+def _resize_image(img: Image.Image, target_size: int, method: str) -> Image.Image:
+    if method in ("upper_bound_resize", "upper_bound_crop"):
+        return _resize_longest_side(img, target_size)
+    elif method in ("lower_bound_resize", "lower_bound_crop"):
+        return _resize_shortest_side(img, target_size)
+    else:
+        raise ValueError(f"Unsupported resize method: {method}")
+
+
+# -----------------------------
+# Make divisible by PATCH_SIZE
+# -----------------------------
+def _make_divisible_by_resize(img: Image.Image, patch: int) -> Image.Image:
+    """
+    Round each dimension to the nearest multiple of PATCH_SIZE via small resize.
+    """
+    w, h = img.size
+
+    def nearest_multiple(x: int, p: int) -> int:
+        down = (x // p) * p
+        up = down + p
+        return up if abs(up - x) <= abs(x - down) else down
+
+    new_w = max(1, nearest_multiple(w, patch))
+    new_h = max(1, nearest_multiple(h, patch))
+    if new_w == w and new_h == h:
+        return img
+    upscale = (new_w > w) or (new_h > h)
+    interpolation = cv2.INTER_CUBIC if upscale else cv2.INTER_AREA
+    arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
+    return Image.fromarray(arr)
+
+
+def _make_divisible_by_crop(img: Image.Image, patch: int) -> Image.Image:
+    """
+    Floor each dimension to the nearest multiple of PATCH_SIZE via center crop.
+    Example: 504x377 -> 504x364
+    """
+    w, h = img.size
+    new_w = (w // patch) * patch
+    new_h = (h // patch) * patch
+    if new_w == w and new_h == h:
+        return img
+    left = (w - new_w) // 2
+    top = (h - new_h) // 2
+    return img.crop((left, top, left + new_w, top + new_h))
 
 
 class InputProcessor:
@@ -85,8 +288,8 @@ class InputProcessor:
             (tensor, extrinsics_list, intrinsics_list)
             tensor shape: (1, N, 3, H, W)
         """
-        sequential = self._resolve_sequential(sequential, num_workers)
-        exts_list, ixts_list = self._validate_and_pack_meta(image, extrinsics, intrinsics)
+        sequential = _resolve_sequential(sequential, num_workers)
+        exts_list, ixts_list = _validate_and_pack_meta(image, extrinsics, intrinsics)
 
         results = self._run_parallel(
             image=image,
@@ -100,10 +303,10 @@ class InputProcessor:
             desc=desc,
         )
 
-        proc_imgs, out_sizes, out_ixts, out_exts = self._unpack_results(results)
-        proc_imgs, out_sizes, out_ixts = self._unify_batch_shapes(proc_imgs, out_sizes, out_ixts)
+        proc_imgs, out_sizes, out_ixts, out_exts = _unpack_results(results)
+        proc_imgs, out_sizes, out_ixts = _unify_batch_shapes(proc_imgs, out_sizes, out_ixts)
 
-        batch_tensor = self._stack_batch(proc_imgs)
+        batch_tensor = _stack_batch(proc_imgs)
         out_exts = (
             torch.from_numpy(np.asarray(out_exts)).float()
             if out_exts is not None and out_exts[0] is not None
@@ -114,29 +317,11 @@ class InputProcessor:
             if out_ixts is not None and out_ixts[0] is not None
             else None
         )
-        return (batch_tensor, out_exts, out_ixts)
+        return batch_tensor, out_exts, out_ixts
 
     # -----------------------------
     # __call__ helpers
     # -----------------------------
-    @staticmethod
-    def _resolve_sequential(sequential: bool | None, num_workers: int) -> bool:
-        return (num_workers <= 1) if sequential is None else sequential
-
-    @staticmethod
-    def _validate_and_pack_meta(
-        images: list[np.ndarray | Image.Image | str],
-        extrinsics: np.ndarray | None,
-        intrinsics: np.ndarray | None,
-    ) -> tuple[list[np.ndarray | None] | None, list[np.ndarray | None] | None]:
-        if extrinsics is not None and len(extrinsics) != len(images):
-            raise ValueError("Length of extrinsics must match images when provided.")
-        if intrinsics is not None and len(intrinsics) != len(images):
-            raise ValueError("Length of intrinsics must match images when provided.")
-        exts_list = [e for e in extrinsics] if extrinsics is not None else None
-        ixts_list = [k for k in intrinsics] if intrinsics is not None else None
-        return exts_list, ixts_list
-
     def _run_parallel(
         self,
         *,
@@ -168,59 +353,6 @@ class InputProcessor:
             )
         return results
 
-    @staticmethod
-    def _unpack_results(results):
-        """
-        results: List[Tuple[torch.Tensor, Tuple[H, W], Optional[np.ndarray], Optional[np.ndarray]]]
-        -> processed_images, out_sizes, out_intrinsics, out_extrinsics
-        """
-        try:
-            processed_images, out_sizes, out_intrinsics, out_extrinsics = zip(*results)
-        except Exception as e:
-            raise RuntimeError(
-                "Unexpected results structure from parallel_execution: "
-                f"{type(results)} / sample: {results[0]}"
-            ) from e
-
-        return list(processed_images), list(out_sizes), list(out_intrinsics), list(out_extrinsics)
-
-    @staticmethod
-    def _unify_batch_shapes(
-        processed_images: list[torch.Tensor],
-        out_sizes: list[tuple[int, int]],
-        out_intrinsics: list[np.ndarray | None],
-    ) -> tuple[list[torch.Tensor], list[tuple[int, int]], list[np.ndarray | None]]:
-        """Center-crop all tensors to the smallest H, W; adjust intrinsics' cx, cy accordingly."""
-        if len(set(out_sizes)) <= 1:
-            return processed_images, out_sizes, out_intrinsics
-
-        min_h = min(h for h, _ in out_sizes)
-        min_w = min(w for _, w in out_sizes)
-        logger.warn(
-            f"Images in batch have different sizes {out_sizes}; "
-            f"center-cropping all to smallest ({min_h},{min_w})"
-        )
-
-        center_crop = T.CenterCrop((min_h, min_w))
-        new_imgs, new_sizes, new_ixts = [], [], []
-        for img_t, (H, W), K in zip(processed_images, out_sizes, out_intrinsics):
-            crop_top = max(0, (H - min_h) // 2)
-            crop_left = max(0, (W - min_w) // 2)
-            new_imgs.append(center_crop(img_t))
-            new_sizes.append((min_h, min_w))
-            if K is None:
-                new_ixts.append(None)
-            else:
-                K_adj = K.copy()
-                K_adj[0, 2] -= crop_left
-                K_adj[1, 2] -= crop_top
-                new_ixts.append(K_adj)
-        return new_imgs, new_sizes, new_ixts
-
-    @staticmethod
-    def _stack_batch(self, processed_images: list[torch.Tensor]) -> torch.Tensor:
-        return torch.stack(processed_images)
-
     # -----------------------------
     # Per-item worker
     # -----------------------------
@@ -233,25 +365,25 @@ class InputProcessor:
         process_res: int,
         process_res_method: str,
     ) -> tuple[torch.Tensor, tuple[int, int], np.ndarray | None, np.ndarray | None]:
-        # Load & remember original size
-        pil_img = self._load_image(img)
+        # Load & remember the original size
+        pil_img = _load_image(img)
         orig_w, orig_h = pil_img.size
 
         # Boundary resize
-        pil_img = self._resize_image(pil_img, process_res, process_res_method)
+        pil_img = _resize_image(pil_img, process_res, process_res_method)
         w, h = pil_img.size
-        intrinsic = self._resize_ixt(intrinsic, orig_w, orig_h, w, h)
+        intrinsic = _resize_ixt(intrinsic, orig_w, orig_h, w, h)
 
         # Enforce divisibility by PATCH_SIZE
         if process_res_method.endswith("resize"):
-            pil_img = self._make_divisible_by_resize(pil_img, self.PATCH_SIZE)
+            pil_img = _make_divisible_by_resize(pil_img, self.PATCH_SIZE)
             new_w, new_h = pil_img.size
-            intrinsic = self._resize_ixt(intrinsic, w, h, new_w, new_h)
+            intrinsic = _resize_ixt(intrinsic, w, h, new_w, new_h)
             w, h = new_w, new_h
         elif process_res_method.endswith("crop"):
-            pil_img = self._make_divisible_by_crop(pil_img, self.PATCH_SIZE)
+            pil_img = _make_divisible_by_crop(pil_img, self.PATCH_SIZE)
             new_w, new_h = pil_img.size
-            intrinsic = self._crop_ixt(intrinsic, w, h, new_w, new_h)
+            intrinsic = _crop_ixt(intrinsic, w, h, new_w, new_h)
             w, h = new_w, new_h
         else:
             raise ValueError(f"Unsupported process_res_method: {process_res_method}")
@@ -263,133 +395,6 @@ class InputProcessor:
 
         # Return: (img_tensor, (H, W), intrinsic, extrinsic)
         return img_tensor, (H, W), intrinsic, extrinsic
-
-    # -----------------------------
-    # Intrinsics transforms
-    # -----------------------------
-    @staticmethod
-    def _resize_ixt(
-        intrinsic: np.ndarray | None,
-        orig_w: int,
-        orig_h: int,
-        w: int,
-        h: int,
-    ) -> np.ndarray | None:
-        if intrinsic is None:
-            return None
-        K = intrinsic.copy()
-        # scale fx, cx by w ratio; fy, cy by h ratio
-        K[:1] *= w / float(orig_w)
-        K[1:2] *= h / float(orig_h)
-        return K
-
-    @staticmethod
-    def _crop_ixt(
-        intrinsic: np.ndarray | None,
-        orig_w: int,
-        orig_h: int,
-        w: int,
-        h: int,
-    ) -> np.ndarray | None:
-        if intrinsic is None:
-            return None
-        K = intrinsic.copy()
-        crop_h = (orig_h - h) // 2
-        crop_w = (orig_w - w) // 2
-        K[0, 2] -= crop_w
-        K[1, 2] -= crop_h
-        return K
-
-    # -----------------------------
-    # I/O & normalization
-    # -----------------------------
-    @staticmethod
-    def _load_image(self, img: np.ndarray | Image.Image | str) -> Image.Image:
-        if isinstance(img, str):
-            return Image.open(img).convert("RGB")
-        elif isinstance(img, np.ndarray):
-            # Assume HxWxC uint8/RGB
-            return Image.fromarray(img).convert("RGB")
-        elif isinstance(img, Image.Image):
-            return img.convert("RGB")
-        else:
-            raise ValueError(f"Unsupported image type: {type(img)}")
-
-    # -----------------------------
-    # Boundary resizing
-    # -----------------------------
-    def _resize_image(self, img: Image.Image, target_size: int, method: str) -> Image.Image:
-        if method in ("upper_bound_resize", "upper_bound_crop"):
-            return self._resize_longest_side(img, target_size)
-        elif method in ("lower_bound_resize", "lower_bound_crop"):
-            return self._resize_shortest_side(img, target_size)
-        else:
-            raise ValueError(f"Unsupported resize method: {method}")
-
-    @staticmethod
-    def _resize_longest_side(self, img: Image.Image, target_size: int) -> Image.Image:
-        w, h = img.size
-        longest = max(w, h)
-        if longest == target_size:
-            return img
-        scale = target_size / float(longest)
-        new_w = max(1, int(round(w * scale)))
-        new_h = max(1, int(round(h * scale)))
-        interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
-        arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
-        return Image.fromarray(arr)
-
-    @staticmethod
-    def _resize_shortest_side(img: Image.Image, target_size: int) -> Image.Image:
-        w, h = img.size
-        shortest = min(w, h)
-        if shortest == target_size:
-            return img
-        scale = target_size / float(shortest)
-        new_w = max(1, int(round(w * scale)))
-        new_h = max(1, int(round(h * scale)))
-        interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
-        arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
-        return Image.fromarray(arr)
-
-    # -----------------------------
-    # Make divisible by PATCH_SIZE
-    # -----------------------------
-    @staticmethod
-    def _make_divisible_by_crop(img: Image.Image, patch: int) -> Image.Image:
-        """
-        Floor each dimension to the nearest multiple of PATCH_SIZE via center crop.
-        Example: 504x377 -> 504x364
-        """
-        w, h = img.size
-        new_w = (w // patch) * patch
-        new_h = (h // patch) * patch
-        if new_w == w and new_h == h:
-            return img
-        left = (w - new_w) // 2
-        top = (h - new_h) // 2
-        return img.crop((left, top, left + new_w, top + new_h))
-
-    @staticmethod
-    def _make_divisible_by_resize(img: Image.Image, patch: int) -> Image.Image:
-        """
-        Round each dimension to nearest multiple of PATCH_SIZE via small resize.
-        """
-        w, h = img.size
-
-        def nearest_multiple(x: int, p: int) -> int:
-            down = (x // p) * p
-            up = down + p
-            return up if abs(up - x) <= abs(x - down) else down
-
-        new_w = max(1, nearest_multiple(w, patch))
-        new_h = max(1, nearest_multiple(h, patch))
-        if new_w == w and new_h == h:
-            return img
-        upscale = (new_w > w) or (new_h > h)
-        interpolation = cv2.INTER_CUBIC if upscale else cv2.INTER_AREA
-        arr = cv2.resize(np.asarray(img), (new_w, new_h), interpolation=interpolation)
-        return Image.fromarray(arr)
 
 
 # Backward compatibility alias
