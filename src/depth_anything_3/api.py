@@ -63,8 +63,8 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         # Load from Hugging Face Hub
         model = DepthAnything3.from_pretrained("huggingface/model-name")
 
-        # Or create with specific preset
-        model = DepthAnything3(preset="vitg")
+        # Or create with a specific model from a predefined config
+        model = DepthAnything3(model_name="da3-large")
 
         # Run inference
         prediction = model.inference(images, export_dir="output", export_format="glb")
@@ -155,6 +155,8 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         feat_vis_fps: int = 15,
         # Other export parameters, e.g., gs_ply, gs_video
         export_kwargs: Optional[dict] = {},
+        alpha_blend_method: str = "mean",
+        batch_method: str = "center_crop",
     ) -> Prediction:
         """
         Run inference on input images.
@@ -182,6 +184,12 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             show_cameras: [GLB] Show camera wireframes in the exported scene (default: True)
             feat_vis_fps: [FEAT_VIS] Frame rate for output video (default: 15)
             export_kwargs: additional arguments to export functions.
+            alpha_blend_method: Alpha blending method for images with an alpha channel.
+                Options: "keep", "white", "black", "mean". The "keep" option keeps the original
+                image pixels, the "mean" option blends the images using the imagenet mean values.
+                Default: "mean".
+            batch_method: Batch processing method for input images.
+                Options: "pad", "center_crop". Default: "center_crop".
 
         Returns:
             Prediction object containing depth maps and camera parameters
@@ -193,8 +201,19 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             assert isinstance(image[0], str), "`image` must be image paths for COLMAP export."
 
         # Preprocess images
-        imgs_cpu, extrinsics, intrinsics = self._preprocess_inputs(
-            image, extrinsics, intrinsics, process_res, process_res_method
+        (
+            imgs_cpu,
+            masks_cpu,
+            extrinsics,
+            intrinsics,
+        ) = self._preprocess_inputs(
+            image=image,
+            extrinsics=extrinsics,
+            intrinsics=intrinsics,
+            process_res=process_res,
+            process_res_method=process_res_method,
+            alpha_blend_method=alpha_blend_method,
+            batch_method=batch_method,
         )
 
         # Prepare tensors for model
@@ -220,6 +239,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
 
         # Add processed images for visualization
         prediction = self._add_processed_images(prediction, imgs_cpu)
+        prediction = self._add_alpha_masks(prediction, masks_cpu)
 
         # Export if requested
         if export_dir is not None:
@@ -279,15 +299,19 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         intrinsics: np.ndarray | None = None,
         process_res: int = 504,
         process_res_method: str = "upper_bound_resize",
+        alpha_blend_method: str = "mean",
+        batch_method: str = "center_crop",
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """Preprocess input images using input processor."""
         start_time = time.time()
-        imgs_cpu, extrinsics, intrinsics = self.input_processor(
-            image,
-            extrinsics.copy() if extrinsics is not None else None,
-            intrinsics.copy() if intrinsics is not None else None,
-            process_res,
-            process_res_method,
+        imgs_cpu, masks_cpu, extrinsics, intrinsics = self.input_processor(
+            image=image,
+            extrinsics=extrinsics.copy() if extrinsics is not None else None,
+            intrinsics=intrinsics.copy() if intrinsics is not None else None,
+            process_res=process_res,
+            process_res_method=process_res_method,
+            alpha_blend_method=alpha_blend_method,
+            batch_method=batch_method,
         )
         end_time = time.time()
         logger.info(
@@ -296,7 +320,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
             "seconds. Shape: ",
             imgs_cpu.shape,
         )
-        return imgs_cpu, extrinsics, intrinsics
+        return imgs_cpu, masks_cpu, extrinsics, intrinsics
 
     def _prepare_model_inputs(
         self,
@@ -396,7 +420,8 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         logger.info(f"Conversion to Prediction Done. Time: {end_time - start_time} seconds")
         return output
 
-    def _add_processed_images(self, prediction: Prediction, imgs_cpu: torch.Tensor) -> Prediction:
+    @staticmethod
+    def _add_processed_images(prediction: Prediction, imgs_cpu: torch.Tensor) -> Prediction:
         """Add processed images to prediction for visualization."""
         # Convert from (N, 3, H, W) to (N, H, W, 3) and denormalize
         processed_imgs = imgs_cpu.permute(0, 2, 3, 1).cpu().numpy()  # (N, H, W, 3)
@@ -409,6 +434,12 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         processed_imgs = (processed_imgs * 255).astype(np.uint8)
 
         prediction.processed_images = processed_imgs
+        return prediction
+
+    @staticmethod
+    def _add_alpha_masks(prediction: Prediction, masks_cpu: torch.Tensor) -> Prediction:
+        """Add alpha masks to prediction for visualization."""
+        prediction.alpha_masks = masks_cpu.cpu().numpy()
         return prediction
 
     def _export_results(
