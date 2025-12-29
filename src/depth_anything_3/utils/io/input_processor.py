@@ -111,8 +111,8 @@ def _unify_batch_shapes(
                 new_ixts.append(None)
             else:
                 K_adj = K.copy()
-                K_adj[0, 2] = max_w
-                K_adj[1, 2] = max_h
+                K_adj[0, 2] += horizontal_padding
+                K_adj[1, 2] += vertical_padding
                 new_ixts.append(K_adj)
 
         return new_imgs, new_masks, new_sizes, new_ixts
