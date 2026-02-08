@@ -18,10 +18,13 @@ Model backend service for Depth Anything 3.
 Provides HTTP API for model inference with persistent model loading.
 """
 
+import html
 import os
 import posixpath
 import time
 import uuid
+import re
+import threading
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
@@ -29,9 +32,9 @@ from urllib.parse import quote
 import numpy as np
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..api import DepthAnything3
 from ..utils.memory import (
@@ -91,6 +94,41 @@ class TaskStatus(BaseModel):
     export_format: Optional[str] = None  # Export format
     process_res_method: Optional[str] = None  # Processing resolution method
     video_path: Optional[str] = None  # Source video path
+    task_kind: str = "manual"  # "manual" or "stream"
+    session_id: Optional[str] = None  # Streaming session ID
+    chunk_id: Optional[int] = None  # Streaming chunk ID
+    frame_start: Optional[int] = None  # Inclusive frame start index for stream chunk
+    frame_end: Optional[int] = None  # Exclusive frame end index for stream chunk
+
+
+class SessionCreateRequest(BaseModel):
+    """Request model for streaming session creation."""
+
+    robot_id: str = "robot-unknown"
+    camera: Dict[str, float] = Field(default_factory=dict)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionCreateResponse(BaseModel):
+    """Response model for streaming session creation."""
+
+    session_id: str
+    upload_url: str
+    events_url: str
+    map_url: str
+    created_at: float
+
+
+class FrameUploadResponse(BaseModel):
+    """Response model for frame upload."""
+
+    success: bool
+    session_id: str
+    frame_index: int
+    frame_path: str
+    total_frames: int
+    queued_tasks: int = 0
+    pending_frames: int = 0
 
 
 class ModelBackend:
@@ -163,10 +201,281 @@ _tasks: Dict[str, TaskStatus] = {}
 _executor = ThreadPoolExecutor(max_workers=1)  # Restrict to single-task execution
 _running_task_id: Optional[str] = None  # Currently running task ID
 _task_queue: List[str] = []  # Pending task queue
+_stream_sessions: Dict[str, Dict[str, Any]] = {}  # Streaming session metadata
+_stream_task_meta: Dict[str, Dict[str, Any]] = {}
+_stream_lock = threading.RLock()
+_session_root: Optional[str] = None
 
 # Task cleanup configuration
 MAX_TASK_HISTORY = 100  # Maximum number of tasks to keep in memory
 CLEANUP_INTERVAL = 300  # Cleanup interval in seconds (5 minutes)
+MAX_SESSION_EVENTS = 2000
+STREAM_DEFAULT_CHUNK_SIZE = 8
+STREAM_DEFAULT_MAX_INFLIGHT = 1
+
+
+def _safe_name(value: Optional[str], fallback: str) -> str:
+    """Normalize a user-provided token to a filesystem-safe token."""
+    if not value:
+        return fallback
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
+    return safe or fallback
+
+
+def _safe_positive_int(value: Any, default: int, minimum: int = 1, maximum: int = 10_000) -> int:
+    """Parse positive integer with fallback and bounds."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _append_session_event(session: Dict[str, Any], event_type: str, payload: Dict[str, Any]) -> None:
+    """Append one session event and keep a bounded event history."""
+    session.setdefault("events", []).append(
+        {"event_type": event_type, "timestamp": time.time(), "payload": payload}
+    )
+    if len(session["events"]) > MAX_SESSION_EVENTS:
+        session["events"] = session["events"][-MAX_SESSION_EVENTS:]
+
+
+def _pending_stream_frames(session: Dict[str, Any]) -> int:
+    """Return number of uploaded-but-not-yet-scheduled frames."""
+    return max(0, int(session["frame_count"]) - int(session["next_frame_index"]))
+
+
+def _enqueue_inference_task(
+    request: InferenceRequest,
+    task_kind: str = "manual",
+    session_id: Optional[str] = None,
+    chunk_id: Optional[int] = None,
+    frame_start: Optional[int] = None,
+    frame_end: Optional[int] = None,
+) -> str:
+    """Create and enqueue an inference task."""
+    global _running_task_id
+
+    task_id = str(uuid.uuid4())
+    if _running_task_id is not None:
+        status_msg = f"[{task_id}] Task queued (waiting for {_running_task_id} to complete)"
+    else:
+        status_msg = f"[{task_id}] Task submitted"
+
+    _tasks[task_id] = TaskStatus(
+        task_id=task_id,
+        status="pending",
+        message=status_msg,
+        created_at=time.time(),
+        export_dir=request.export_dir,
+        request=request,
+        num_images=len(request.image_paths),
+        export_format=request.export_format,
+        process_res_method=request.process_res_method,
+        video_path=(request.image_paths[0] if request.image_paths else None),
+        task_kind=task_kind,
+        session_id=session_id,
+        chunk_id=chunk_id,
+        frame_start=frame_start,
+        frame_end=frame_end,
+    )
+
+    if task_kind == "stream" and session_id is not None and chunk_id is not None:
+        _stream_task_meta[task_id] = {
+            "session_id": session_id,
+            "chunk_id": chunk_id,
+            "frame_start": frame_start,
+            "frame_end": frame_end,
+            "export_dir": request.export_dir,
+        }
+
+    _task_queue.append(task_id)
+    if _running_task_id is None:
+        _process_next_task()
+    return task_id
+
+
+def _reserve_stream_chunk(session_id: str, force: bool = False) -> Optional[Dict[str, Any]]:
+    """
+    Reserve one chunk of frames from a session for inference scheduling.
+
+    Returns chunk metadata if a chunk should be scheduled; otherwise None.
+    """
+    with _stream_lock:
+        session = _stream_sessions.get(session_id)
+        if session is None:
+            return None
+
+        inflight = len(session["inflight_task_ids"])
+        if inflight >= int(session["max_inflight_chunks"]):
+            return None
+
+        pending = _pending_stream_frames(session)
+        if pending <= 0:
+            return None
+
+        chunk_size = int(session["chunk_size"])
+        if pending < chunk_size and not force:
+            return None
+
+        frame_start = int(session["next_frame_index"])
+        take = chunk_size if pending >= chunk_size else pending
+        frame_end = frame_start + take
+        frame_records = session["frames"][frame_start:frame_end]
+        if not frame_records:
+            return None
+
+        chunk_id = int(session["next_chunk_id"])
+        session["next_chunk_id"] = chunk_id + 1
+        session["next_frame_index"] = frame_end
+
+        return {
+            "session_id": session_id,
+            "chunk_id": chunk_id,
+            "frame_start": frame_start,
+            "frame_end": frame_end,
+            "frame_paths": [item["frame_path"] for item in frame_records],
+            "config": dict(session.get("config") or {}),
+            "session_dir": session["session_dir"],
+        }
+
+
+def _schedule_stream_inference(session_id: str, force: bool = False) -> int:
+    """
+    Schedule as many stream chunks as possible for one session.
+
+    Returns number of newly queued inference tasks.
+    """
+    queued = 0
+    while True:
+        chunk = _reserve_stream_chunk(session_id, force=force)
+        if chunk is None:
+            break
+
+        cfg = chunk["config"]
+        export_dir = os.path.join(
+            chunk["session_dir"], "inference", f"chunk_{chunk['chunk_id']:06d}"
+        )
+        request = InferenceRequest(
+            image_paths=chunk["frame_paths"],
+            export_dir=export_dir,
+            export_format=str(cfg.get("export_format", "mini_npz")),
+            process_res=_safe_positive_int(cfg.get("process_res"), 504, minimum=64, maximum=2048),
+            process_res_method=str(cfg.get("process_res_method", "upper_bound_resize")),
+            export_feat_layers=(
+                cfg.get("export_feat_layers")
+                if isinstance(cfg.get("export_feat_layers"), list)
+                else []
+            ),
+            align_to_input_ext_scale=bool(cfg.get("align_to_input_ext_scale", True)),
+            conf_thresh_percentile=float(cfg.get("conf_thresh_percentile", 40.0)),
+            num_max_points=_safe_positive_int(
+                cfg.get("num_max_points"), 1_000_000, minimum=1_000, maximum=20_000_000
+            ),
+            show_cameras=bool(cfg.get("show_cameras", True)),
+            feat_vis_fps=_safe_positive_int(cfg.get("feat_vis_fps"), 15, minimum=1, maximum=120),
+        )
+
+        task_id = _enqueue_inference_task(
+            request=request,
+            task_kind="stream",
+            session_id=chunk["session_id"],
+            chunk_id=chunk["chunk_id"],
+            frame_start=chunk["frame_start"],
+            frame_end=chunk["frame_end"],
+        )
+
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                continue
+            session["inflight_task_ids"].append(task_id)
+            session["worker_state"] = "running"
+            _append_session_event(
+                session,
+                "inference_chunk_queued",
+                {
+                    "task_id": task_id,
+                    "chunk_id": chunk["chunk_id"],
+                    "frame_start": chunk["frame_start"],
+                    "frame_end": chunk["frame_end"],
+                    "num_frames": len(chunk["frame_paths"]),
+                    "export_dir": export_dir,
+                },
+            )
+        queued += 1
+
+    return queued
+
+
+def _finalize_stream_task(task_id: str, succeeded: bool, message: str) -> None:
+    """Update streaming session state when a stream task completes."""
+    meta = _stream_task_meta.pop(task_id, None)
+    if meta is None:
+        return
+
+    session_id = meta["session_id"]
+    with _stream_lock:
+        session = _stream_sessions.get(session_id)
+        if session is None:
+            return
+
+        session["inflight_task_ids"] = [tid for tid in session["inflight_task_ids"] if tid != task_id]
+        session["last_inference_at"] = time.time()
+
+        if succeeded:
+            session["completed_chunks"] += 1
+            session["latest_chunk"] = {
+                "task_id": task_id,
+                "chunk_id": meta["chunk_id"],
+                "frame_start": meta["frame_start"],
+                "frame_end": meta["frame_end"],
+                "export_dir": meta.get("export_dir"),
+            }
+            session["map_pointer"] = meta.get("export_dir")
+            _append_session_event(
+                session,
+                "inference_chunk_completed",
+                {
+                    "task_id": task_id,
+                    "chunk_id": meta["chunk_id"],
+                    "frame_start": meta["frame_start"],
+                    "frame_end": meta["frame_end"],
+                    "export_dir": meta.get("export_dir"),
+                    "message": message,
+                },
+            )
+            _append_session_event(
+                session,
+                "map_chunk",
+                {
+                    "chunk_id": meta["chunk_id"],
+                    "map_pointer": session["map_pointer"],
+                    "frame_count": session["frame_count"],
+                },
+            )
+        else:
+            session["failed_chunks"] += 1
+            _append_session_event(
+                session,
+                "inference_chunk_failed",
+                {
+                    "task_id": task_id,
+                    "chunk_id": meta["chunk_id"],
+                    "frame_start": meta["frame_start"],
+                    "frame_end": meta["frame_end"],
+                    "message": message,
+                },
+            )
+
+        session["worker_state"] = "running" if session["inflight_task_ids"] else "idle"
+        force_next = bool(session.get("flush_requested", False))
+        if _pending_stream_frames(session) <= 0:
+            session["flush_requested"] = False
+            force_next = False
+
+    # Try to keep the pipeline flowing after completion/failure.
+    _schedule_stream_inference(session_id, force=force_next)
 
 
 def _process_next_task():
@@ -347,6 +656,7 @@ def _run_inference_task(task_id: str):
 
         # Process next task in queue
         _process_next_task()
+        _finalize_stream_task(task_id, succeeded=True, message=_tasks[task_id].message)
 
         print(f"[{task_id}] Task completed successfully")
         print(
@@ -374,6 +684,7 @@ def _run_inference_task(task_id: str):
 
         # Process next task in queue
         _process_next_task()
+        _finalize_stream_task(task_id, succeeded=False, message=_tasks[task_id].message)
 
     finally:
         # Final cleanup in finally block to ensure it always runs
@@ -558,7 +869,7 @@ def build_group_manifest(root_dir: str, group: str) -> dict:
 
 def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] = None) -> FastAPI:
     """Create FastAPI application with model backend."""
-    global _backend, _app
+    global _backend, _app, _stream_sessions, _stream_task_meta, _session_root
 
     _backend = ModelBackend(model_dir, device)
     _app = FastAPI(
@@ -569,12 +880,25 @@ def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] 
 
     # Store gallery directory globally for use in routes
     _gallery_dir = gallery_dir
+    _session_root = os.path.join(os.getcwd(), "workspace", "stream_sessions")
+    os.makedirs(_session_root, exist_ok=True)
+    with _stream_lock:
+        _stream_sessions = {}
+        _stream_task_meta = {}
 
     @_app.get("/", response_class=HTMLResponse)
     async def root():
         """Home page with navigation to dashboard and gallery."""
-        html_content = (
+        gallery_card = ""
+        if _gallery_dir and os.path.exists(_gallery_dir):
+            gallery_card = """
+            <a href="/gallery/" class="quick-link">
+                <h2>Scene Gallery</h2>
+                <p>Inspect generated GLB scenes, thumbnails, and depth visualization assets.</p>
+            </a>
             """
+
+        html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -582,249 +906,174 @@ def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] 
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Depth Anything 3 Backend</title>
     <style>
-        :root {
-            --tech-blue: #00d4ff;
-            --tech-cyan: #00ffcc;
-            --tech-purple: #7877c6;
-        }
+        :root {{
+            --ink: #132238;
+            --ink-soft: #425a76;
+            --paper: #f7f5f0;
+            --panel: rgba(255, 255, 255, 0.78);
+            --line: rgba(19, 34, 56, 0.16);
+            --accent-a: #d45500;
+            --accent-b: #00827f;
+            --accent-c: #1b5dbf;
+            --focus: #0a7a75;
+            --shadow: 0 18px 40px rgba(18, 38, 62, 0.18);
+        }}
 
-        * {
+        * {{
             box-sizing: border-box;
-        }
+        }}
 
-        /* Dark mode styles */
-        @media (prefers-color-scheme: dark) {
-            body {
-                margin: 0;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
-                color: #e8eaed;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                position: relative;
-                overflow-x: hidden;
-            }
+        body {{
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Space Grotesk", "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 12% 18%, rgba(212, 85, 0, 0.18), transparent 42%),
+                radial-gradient(circle at 82% 0%, rgba(0, 130, 127, 0.18), transparent 36%),
+                linear-gradient(155deg, #fdfcf9 0%, #f6f3eb 45%, #e9efe9 100%);
+            padding: 28px 18px;
+        }}
 
-            body::before {
-                content: '';
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background:
-                    radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
-                    radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.2) 0%, transparent 50%);
-                animation: techPulse 8s ease-in-out infinite;
-                z-index: -1;
-            }
+        .shell {{
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 30px;
+            border-radius: 24px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow);
+            animation: rise 600ms ease-out both;
+        }}
 
-            .container {
-                max-width: 800px;
-                padding: 40px;
-                text-align: center;
-                z-index: 1;
-            }
+        .badge {{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(27, 93, 191, 0.24);
+            color: var(--accent-c);
+            background: rgba(27, 93, 191, 0.08);
+            padding: 6px 12px;
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }}
 
-            h1 {
-                font-size: 3em;
-                margin: 0 0 20px 0;
-                background: linear-gradient(45deg, var(--tech-blue), var(--tech-cyan), var(--tech-purple));
-                background-size: 400% 400%;
-                -webkit-background-clip: text;
-                background-clip: text;
-                color: transparent;
-                animation: techGradient 3s ease infinite;
-                text-shadow: 0 0 30px rgba(0, 212, 255, 0.5);
-            }
+        h1 {{
+            margin: 18px 0 10px;
+            font-size: clamp(2rem, 4vw, 3.2rem);
+            line-height: 1.05;
+            letter-spacing: -0.02em;
+        }}
 
-            .subtitle {
-                font-size: 1.2em;
-                opacity: 0.8;
-                margin-bottom: 50px;
-                color: #a0a0a0;
-            }
+        .lede {{
+            margin: 0;
+            color: var(--ink-soft);
+            font-size: clamp(1rem, 1.8vw, 1.2rem);
+            max-width: 62ch;
+        }}
 
-            .nav-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 24px;
-                margin-top: 40px;
-            }
+        .quick-grid {{
+            margin-top: 30px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 14px;
+        }}
 
-            .nav-card {
-                background: rgba(0, 0, 0, 0.3);
-                border: 1px solid rgba(0, 212, 255, 0.2);
-                border-radius: 16px;
-                padding: 30px;
-                text-decoration: none;
-                color: inherit;
-                transition: all 0.3s ease;
-                backdrop-filter: blur(10px);
-            }
+        .quick-link {{
+            text-decoration: none;
+            color: inherit;
+            padding: 18px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.78);
+            transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+            animation: rise 700ms ease-out both;
+        }}
 
-            .nav-card:hover {
-                transform: translateY(-4px);
-                border-color: var(--tech-blue);
-                box-shadow: 0 8px 25px rgba(0, 212, 255, 0.2);
-            }
+        .quick-link:hover {{
+            transform: translateY(-2px);
+            border-color: rgba(212, 85, 0, 0.42);
+            box-shadow: 0 10px 20px rgba(18, 38, 62, 0.14);
+        }}
 
-            .nav-card h2 {
-                margin: 0 0 15px 0;
-                font-size: 1.8em;
-                color: var(--tech-blue);
-            }
+        .quick-link:focus-visible {{
+            outline: 3px solid var(--focus);
+            outline-offset: 2px;
+        }}
 
-            .nav-card p {
-                margin: 0;
-                opacity: 0.8;
-                line-height: 1.6;
-            }
-        }
+        .quick-link h2 {{
+            margin: 0 0 8px;
+            font-size: 1.15rem;
+            color: var(--accent-a);
+            letter-spacing: -0.01em;
+        }}
 
-        /* Light mode styles */
-        @media (prefers-color-scheme: light) {
-            body {
-                margin: 0;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 50%, #cbd5e1 100%);
-                color: #1e293b;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                position: relative;
-                overflow-x: hidden;
-            }
+        .quick-link p {{
+            margin: 0;
+            color: var(--ink-soft);
+            line-height: 1.45;
+            font-size: 0.96rem;
+        }}
 
-            body::before {
-                content: '';
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background:
-                    radial-gradient(circle at 20% 80%, rgba(0, 212, 255, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 20%, rgba(0, 102, 255, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 40% 40%, rgba(0, 255, 204, 0.08) 0%, transparent 50%);
-                animation: techPulse 8s ease-in-out infinite;
-                z-index: -1;
-            }
+        .footer {{
+            margin-top: 28px;
+            color: #5a6e87;
+            font-size: 0.88rem;
+        }}
 
-            .container {
-                max-width: 800px;
-                padding: 40px;
-                text-align: center;
-                z-index: 1;
-            }
+        @keyframes rise {{
+            from {{
+                opacity: 0;
+                transform: translateY(8px);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
 
-            h1 {
-                font-size: 3em;
-                margin: 0 0 20px 0;
-                background: linear-gradient(45deg, #0066ff, #00d4ff, #00ffcc);
-                background-size: 400% 400%;
-                -webkit-background-clip: text;
-                background-clip: text;
-                color: transparent;
-                animation: techGradient 3s ease infinite;
-                text-shadow: 0 0 20px rgba(0, 102, 255, 0.3);
-            }
+        @media (max-width: 720px) {{
+            body {{
+                padding: 14px;
+            }}
 
-            .subtitle {
-                font-size: 1.2em;
-                opacity: 0.8;
-                margin-bottom: 50px;
-                color: #64748b;
-            }
-
-            .nav-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 24px;
-                margin-top: 40px;
-            }
-
-            .nav-card {
-                background: rgba(255, 255, 255, 0.8);
-                border: 1px solid rgba(0, 212, 255, 0.3);
-                border-radius: 16px;
-                padding: 30px;
-                text-decoration: none;
-                color: inherit;
-                transition: all 0.3s ease;
-                backdrop-filter: blur(10px);
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            }
-
-            .nav-card:hover {
-                transform: translateY(-4px);
-                border-color: #0066ff;
-                box-shadow: 0 8px 25px rgba(0, 102, 255, 0.2);
-            }
-
-            .nav-card h2 {
-                margin: 0 0 15px 0;
-                font-size: 1.8em;
-                color: #0066ff;
-            }
-
-            .nav-card p {
-                margin: 0;
-                opacity: 0.8;
-                line-height: 1.6;
-            }
-        }
-
-        @keyframes techPulse {
-            0%, 100% { opacity: 0.5; }
-            50% { opacity: 0.8; }
-        }
-
-        @keyframes techGradient {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-
-        .footer {
-            margin-top: 50px;
-            opacity: 0.6;
-            font-size: 0.9em;
-        }
+            .shell {{
+                padding: 22px 18px;
+                border-radius: 20px;
+            }}
+        }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Depth Anything 3</h1>
-        <p class="subtitle">Model Backend Service</p>
-        <div class="nav-grid">
-            <a href="/dashboard" class="nav-card">
-                <h2>📊 Dashboard</h2>
-                <p>Monitor backend status, model information, and inference tasks in real-time.</p>
+    <main class="shell">
+        <span class="badge">Control Plane</span>
+        <h1>Depth Anything 3 Backend</h1>
+        <p class="lede">
+            Use the dashboard to monitor model health, queue activity, and active streaming sessions from one place.
+        </p>
+
+        <section class="quick-grid">
+            <a href="/dashboard" class="quick-link">
+                <h2>Operations Dashboard</h2>
+                <p>Track model status, active jobs, recent outputs, and streaming sessions.</p>
             </a>
-            """
-            + (
-                '<a href="/gallery/" class="nav-card">'
-                "<h2>🎨 Gallery</h2>"
-                "<p>Browse 3D reconstructions and depth visualizations from processed scenes.</p>"
-                "</a>"
-                if _gallery_dir and os.path.exists(_gallery_dir)
-                else ""
-            )
-            + """
-        </div>
-        <div class="footer">
-            <p>Depth Anything 3 Backend API</p>
-        </div>
-    </div>
+            <a href="/status" class="quick-link">
+                <h2>API Status JSON</h2>
+                <p>Inspect machine-readable status payloads for uptime and memory diagnostics.</p>
+            </a>
+            {gallery_card}
+        </section>
+
+        <p class="footer">Depth Anything 3 Backend Service</p>
+    </main>
 </body>
 </html>
         """
-        )
+
         return HTMLResponse(html_content)
 
     @_app.get("/dashboard", response_class=HTMLResponse)
@@ -833,317 +1082,543 @@ def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] 
         if _backend is None:
             return HTMLResponse("<h1>Backend not initialized</h1>", status_code=500)
 
-        # Get backend status
         status = _backend.get_status()
-
-        # Safely format status values
-        if status["load_time"] is not None:
-            load_time_str = f"{status['load_time']:.2f}s"
-        else:
-            load_time_str = "Not loaded"
-
-        if status["uptime"] is not None:
-            uptime_str = f"{status['uptime']:.2f}s"
-        else:
-            uptime_str = "Not running"
-
-        # Get tasks information
         active_tasks = [task for task in _tasks.values() if task.status in ["pending", "running"]]
-        completed_tasks = [
-            task for task in _tasks.values() if task.status in ["completed", "failed"]
-        ]
+        completed_tasks = [task for task in _tasks.values() if task.status in ["completed", "failed"]]
+        with _stream_lock:
+            sessions = sorted(
+                [
+                    {
+                        "session_id": s.get("session_id"),
+                        "robot_id": s.get("robot_id"),
+                        "created_at": s.get("created_at"),
+                        "frame_count": s.get("frame_count", 0),
+                        "latest_frame_path": s.get("latest_frame_path"),
+                        "event_count": len(s.get("events", [])) if isinstance(s.get("events"), list) else 0,
+                    }
+                    for s in _stream_sessions.values()
+                ],
+                key=lambda s: float(s.get("created_at", 0.0)),
+                reverse=True,
+            )
 
-        # Generate task HTML
-        active_tasks_html = ""
-        if active_tasks:
-            for task in active_tasks:
-                task_details = f"""
-                <div class="task-item running">
-                    <div class="task-header">
-                        <span class="task-id">{task.task_id}</span>
-                        <span class="task-status status-{task.status}">{task.status}</span>
-                    </div>
-                    <div class="task-message">{task.message}</div>
-                    <div class="task-params">
-                        <small>
-                            Images: {task.num_images or 'N/A'} |
-                            Format: {task.export_format or 'N/A'} |
-                            Method: {task.process_res_method or 'N/A'} |
-                            Export Dir: {task.export_dir or 'N/A'}
-                        </small>
-                        {f'<br><small>Video: {task.video_path}</small>' if task.video_path else ''}
-                    </div>
+        def _fmt_seconds(value: Any) -> str:
+            if value is None:
+                return "-"
+            try:
+                return f"{float(value):.2f}s"
+            except Exception:
+                return "-"
+
+        def _fmt_ts(value: Any) -> str:
+            if value is None:
+                return "-"
+            try:
+                return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(value)))
+            except Exception:
+                return "-"
+
+        def _render_task_card(task: TaskStatus, tone: str) -> str:
+            safe_task_id = html.escape(task.task_id)
+            safe_message = html.escape(task.message or "-")
+            safe_video = html.escape(task.video_path) if task.video_path else "-"
+            safe_export_dir = html.escape(task.export_dir or "-")
+            status_name = task.status if task.status in {"pending", "running", "completed", "failed"} else "pending"
+
+            progress_html = ""
+            if task.progress is not None:
+                progress_pct = max(0, min(100, int(float(task.progress) * 100)))
+                progress_html = f"""
+                <div class="progress-track" aria-label="task progress">
+                    <div class="progress-fill" style="width: {progress_pct}%"></div>
                 </div>
                 """
-                active_tasks_html += task_details
-        else:
-            active_tasks_html = "<p>No active tasks</p>"
 
-        completed_tasks_html = ""
-        if completed_tasks:
-            for task in completed_tasks[-10:]:
-                task_details = f"""
-                <div class="task-item completed">
-                    <div class="task-header">
-                        <span class="task-id">{task.task_id}</span>
-                        <span class="task-status status-{task.status}">{task.status}</span>
-                    </div>
-                    <div class="task-message">{task.message}</div>
-                    <div class="task-params">
-                        <small>
-                            Images: {task.num_images or 'N/A'} |
-                            Format: {task.export_format or 'N/A'} |
-                            Method: {task.process_res_method or 'N/A'} |
-                            Export Dir: {task.export_dir or 'N/A'}
-                        </small>
-                        {f'<br><small>Video: {task.video_path}</small>' if task.video_path else ''}
-                    </div>
+            return f"""
+            <article class="task-card task-{tone}">
+                <header>
+                    <code>{safe_task_id}</code>
+                    <span class="chip chip-{status_name}">{status_name}</span>
+                </header>
+                <p class="task-message">{safe_message}</p>
+                {progress_html}
+                <div class="meta-grid">
+                    <span>Images: <strong>{task.num_images or "-"}</strong></span>
+                    <span>Format: <strong>{html.escape(task.export_format or "-")}</strong></span>
+                    <span>Method: <strong>{html.escape(task.process_res_method or "-")}</strong></span>
+                    <span>Video: <strong>{safe_video}</strong></span>
+                    <span>Export: <strong>{safe_export_dir}</strong></span>
+                    <span>Created: <strong>{_fmt_ts(task.created_at)}</strong></span>
                 </div>
-                """
-                completed_tasks_html += task_details
-        else:
-            completed_tasks_html = "<p>No completed tasks</p>"
+            </article>
+            """
 
-        # Generate HTML
+        active_tasks_html = (
+            "".join(_render_task_card(task, "active") for task in active_tasks)
+            if active_tasks
+            else '<p class="empty-state">No active tasks.</p>'
+        )
+
+        completed_tasks_sorted = sorted(
+            completed_tasks, key=lambda t: float(t.completed_at or t.created_at or 0.0), reverse=True
+        )
+        completed_tasks_html = (
+            "".join(_render_task_card(task, "completed") for task in completed_tasks_sorted[:12])
+            if completed_tasks_sorted
+            else '<p class="empty-state">No completed tasks yet.</p>'
+        )
+
+        session_cards_html = ""
+        if sessions:
+            for session in sessions[:12]:
+                safe_session_id = html.escape(str(session.get("session_id", "unknown")))
+                safe_robot_id = html.escape(str(session.get("robot_id", "robot-unknown")))
+                safe_latest = html.escape(
+                    os.path.basename(str(session.get("latest_frame_path") or "-"))
+                )
+                event_count = int(session.get("event_count", 0))
+                frame_count = int(session.get("frame_count", 0))
+                session_cards_html += f"""
+                <article class="session-card">
+                    <header>
+                        <code>{safe_session_id}</code>
+                        <span class="chip chip-session">streaming</span>
+                    </header>
+                    <div class="meta-grid">
+                        <span>Robot: <strong>{safe_robot_id}</strong></span>
+                        <span>Created: <strong>{_fmt_ts(session.get("created_at"))}</strong></span>
+                        <span>Frames: <strong>{frame_count}</strong></span>
+                        <span>Events: <strong>{event_count}</strong></span>
+                        <span>Latest Frame: <strong>{safe_latest}</strong></span>
+                    </div>
+                </article>
+                """
+        else:
+            session_cards_html = '<p class="empty-state">No active streaming sessions.</p>'
+
+        load_time_str = _fmt_seconds(status.get("load_time"))
+        uptime_str = _fmt_seconds(status.get("uptime"))
+        model_state = "online" if status.get("model_loaded") else "offline"
+        model_class = "chip-ok" if status.get("model_loaded") else "chip-alert"
+        model_dir = html.escape(str(status.get("model_dir", "-")))
+        device = html.escape(str(status.get("device", "-")))
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
         html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Depth Anything 3 Backend Dashboard</title>
+    <title>Depth Anything 3 Dashboard</title>
     <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
+        :root {{
+            --ink: #172a3e;
+            --ink-soft: #546980;
+            --paper: #f4f3ee;
+            --panel: rgba(255, 255, 255, 0.86);
+            --line: rgba(23, 42, 62, 0.14);
+            --accent: #db5d16;
+            --accent-2: #0e7f7c;
+            --accent-3: #1b5dbf;
+            --ok-bg: #d7f5ec;
+            --ok-fg: #0f7757;
+            --warn-bg: #fff3d6;
+            --warn-fg: #8a5800;
+            --err-bg: #fde2de;
+            --err-fg: #8d2e23;
+            --focus: #0a7a75;
+            --shadow: 0 14px 30px rgba(18, 38, 62, 0.14);
         }}
+
+        * {{
+            box-sizing: border-box;
+        }}
+
+        body {{
+            margin: 0;
+            font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 14% 0%, rgba(219, 93, 22, 0.17), transparent 36%),
+                radial-gradient(circle at 88% 100%, rgba(14, 127, 124, 0.2), transparent 40%),
+                linear-gradient(145deg, #fbfaf6 0%, #f0efe8 42%, #e8efea 100%);
+            min-height: 100vh;
+            padding: 18px;
+        }}
+
         .container {{
-            max-width: 1200px;
+            max-width: 1280px;
             margin: 0 auto;
         }}
-        .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            text-align: center;
-        }}
-        .status-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }}
-        .status-card {{
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }}
-        .status-card h3 {{
-            margin-top: 0;
-            color: #333;
-        }}
-        .status-item {{
+
+        .hero {{
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            background: var(--panel);
+            backdrop-filter: blur(8px);
+            box-shadow: var(--shadow);
+            padding: 22px;
             display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
             justify-content: space-between;
-            margin: 10px 0;
-            padding: 8px 0;
-            border-bottom: 1px solid #eee;
+            align-items: flex-start;
+            animation: rise 520ms ease-out both;
         }}
-        .status-item:last-child {{
-            border-bottom: none;
+
+        .hero h1 {{
+            margin: 0 0 8px;
+            font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+            letter-spacing: -0.015em;
+            font-size: clamp(1.6rem, 3vw, 2.3rem);
         }}
-        .status-value {{
-            font-weight: bold;
-            color: #666;
+
+        .hero p {{
+            margin: 0;
+            color: var(--ink-soft);
+            max-width: 66ch;
         }}
-        .status-online {{
-            color: #28a745;
+
+        .hero-actions {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
         }}
-        .status-offline {{
-            color: #dc3545;
-        }}
-        .tasks-section {{
-            background: white;
-            padding: 20px;
+
+        button, .link-btn {{
+            border: 1px solid rgba(27, 93, 191, 0.3);
+            background: rgba(27, 93, 191, 0.1);
+            color: #164a97;
             border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+            padding: 9px 14px;
+            font-weight: 700;
+            text-decoration: none;
+            cursor: pointer;
+            transition: transform 180ms ease, box-shadow 180ms ease;
         }}
-        .task-item {{
-            background: #f8f9fa;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            border-left: 4px solid #007bff;
+
+        button:hover, .link-btn:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 8px 14px rgba(17, 56, 119, 0.18);
         }}
-        .task-item.completed {{
-            border-left-color: #28a745;
+
+        button:focus-visible, .link-btn:focus-visible, input:focus-visible {{
+            outline: 3px solid var(--focus);
+            outline-offset: 2px;
         }}
-        .task-item.failed {{
-            border-left-color: #dc3545;
+
+        .switch {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--ink-soft);
+            font-size: 0.92rem;
         }}
-        .task-item.running {{
-            border-left-color: #ffc107;
+
+        .stamp {{
+            margin-top: 8px;
+            color: var(--ink-soft);
+            font-size: 0.85rem;
         }}
-        .task-header {{
+
+        .stats-grid {{
+            margin-top: 14px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 12px;
+            animation: rise 620ms ease-out both;
+        }}
+
+        .stat-card {{
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: var(--panel);
+            padding: 14px 16px;
+            box-shadow: var(--shadow);
+        }}
+
+        .stat-card h2 {{
+            margin: 0;
+            font-size: 0.88rem;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            color: var(--ink-soft);
+        }}
+
+        .stat-card .value {{
+            margin-top: 8px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }}
+
+        .stat-card .meta {{
+            margin-top: 6px;
+            color: var(--ink-soft);
+            font-size: 0.86rem;
+        }}
+
+        .layout {{
+            margin-top: 14px;
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 12px;
+        }}
+
+        .panel {{
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            padding: 14px;
+            animation: rise 700ms ease-out both;
+        }}
+
+        .panel h3 {{
+            margin: 0 0 10px;
+            font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+            letter-spacing: -0.01em;
+        }}
+
+        .stack {{
+            display: grid;
+            gap: 10px;
+        }}
+
+        .task-card, .session-card {{
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.82);
+        }}
+
+        .task-card header, .session-card header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 8px;
             margin-bottom: 8px;
         }}
-        .task-id {{
-            font-family: monospace;
-            font-size: 12px;
-            color: #666;
+
+        code {{
+            font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+            font-size: 0.83rem;
+            padding: 3px 7px;
+            border-radius: 8px;
+            background: rgba(27, 93, 191, 0.08);
+            color: #1f4378;
         }}
-        .task-status {{
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-        }}
-        .status-pending {{
-            background: #fff3cd;
-            color: #856404;
-        }}
-        .status-running {{
-            background: #d4edda;
-            color: #155724;
-        }}
-        .status-completed {{
-            background: #d1ecf1;
-            color: #0c5460;
-        }}
-        .status-failed {{
-            background: #f8d7da;
-            color: #721c24;
-        }}
-        .refresh-btn {{
-            background: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-        }}
-        .refresh-btn:hover {{
-            background: #0056b3;
-        }}
-        .auto-refresh {{
-            margin-left: 10px;
-        }}
-        .timestamp {{
-            font-size: 12px;
-            color: #666;
-            margin-top: 10px;
-        }}
+
         .task-message {{
-            font-size: 14px;
-            color: #333;
-            margin-bottom: 8px;
+            margin: 0 0 8px;
+            color: #263f5b;
+            line-height: 1.4;
+            word-break: break-word;
         }}
-        .task-params {{
-            font-size: 12px;
-            color: #666;
-            background: #f8f9fa;
-            padding: 6px 8px;
-            border-radius: 4px;
-            margin-top: 8px;
+
+        .meta-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+            gap: 6px 12px;
+            color: var(--ink-soft);
+            font-size: 0.84rem;
+        }}
+
+        .meta-grid strong {{
+            color: #203955;
+            font-weight: 650;
+            margin-left: 4px;
+        }}
+
+        .chip {{
+            border-radius: 999px;
+            padding: 3px 9px;
+            font-size: 0.73rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            border: 1px solid transparent;
+        }}
+
+        .chip-ok {{
+            background: var(--ok-bg);
+            color: var(--ok-fg);
+            border-color: rgba(15, 119, 87, 0.24);
+        }}
+
+        .chip-alert {{
+            background: var(--err-bg);
+            color: var(--err-fg);
+            border-color: rgba(141, 46, 35, 0.2);
+        }}
+
+        .chip-session {{
+            background: rgba(27, 93, 191, 0.1);
+            color: #1f4f91;
+            border-color: rgba(27, 93, 191, 0.28);
+        }}
+
+        .chip-pending {{
+            background: var(--warn-bg);
+            color: var(--warn-fg);
+            border-color: rgba(138, 88, 0, 0.24);
+        }}
+
+        .chip-running {{
+            background: rgba(214, 244, 255, 0.84);
+            color: #0f5b7e;
+            border-color: rgba(15, 91, 126, 0.2);
+        }}
+
+        .chip-completed {{
+            background: var(--ok-bg);
+            color: var(--ok-fg);
+            border-color: rgba(15, 119, 87, 0.24);
+        }}
+
+        .chip-failed {{
+            background: var(--err-bg);
+            color: var(--err-fg);
+            border-color: rgba(141, 46, 35, 0.2);
+        }}
+
+        .progress-track {{
+            height: 7px;
+            width: 100%;
+            border-radius: 999px;
+            background: rgba(27, 93, 191, 0.12);
+            overflow: hidden;
+            margin: 8px 0 10px;
+        }}
+
+        .progress-fill {{
+            height: 100%;
+            background: linear-gradient(90deg, #db5d16, #1b5dbf);
+            border-radius: 999px;
+            transition: width 220ms ease;
+        }}
+
+        .empty-state {{
+            color: var(--ink-soft);
+            margin: 4px 0;
+        }}
+
+        @keyframes rise {{
+            from {{
+                opacity: 0;
+                transform: translateY(8px);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
+
+        @media (max-width: 980px) {{
+            .layout {{
+                grid-template-columns: 1fr;
+            }}
         }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Depth Anything 3 Backend Dashboard</h1>
-            <p>Real-time monitoring of model status and inference tasks</p>
-        </div>
-
-        <div class="status-grid">
-            <div class="status-card">
-                <h3>Model Status</h3>
-                <div class="status-item">
-                    <span>Status:</span>
-                    <span class="status-value {'status-online' if status['model_loaded'] else 'status-offline'}">
-                        {'Online' if status['model_loaded'] else 'Offline'}
-                    </span>
-                </div>
-                <div class="status-item">
-                    <span>Model Directory:</span>
-                    <span class="status-value">{status['model_dir']}</span>
-                </div>
-                <div class="status-item">
-                    <span>Device:</span>
-                    <span class="status-value">{status['device']}</span>
-                </div>
-                <div class="status-item">
-                    <span>Load Time:</span>
-                    <span class="status-value">{load_time_str}</span>
-                </div>
-                <div class="status-item">
-                    <span>Uptime:</span>
-                    <span class="status-value">{uptime_str}</span>
+    <main class="container">
+        <section class="hero">
+            <div>
+                <h1>Backend Operations Dashboard</h1>
+                <p>Monitor model availability, streaming sessions, and queued jobs in one place.</p>
+                <div class="stamp">Last updated: <span id="lastUpdate">{now_str}</span></div>
+            </div>
+            <div>
+                <div class="hero-actions">
+                    <button type="button" onclick="location.reload()">Refresh</button>
+                    <a class="link-btn" href="/">Home</a>
+                    <a class="link-btn" href="/status">Status JSON</a>
+                    <label class="switch">
+                        <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+                        Auto refresh (5s)
+                    </label>
                 </div>
             </div>
+        </section>
 
-            <div class="status-card">
-                <h3>Task Summary</h3>
-                <div class="status-item">
-                    <span>Active Tasks:</span>
-                    <span class="status-value">{len(active_tasks)}</span>
+        <section class="stats-grid">
+            <article class="stat-card">
+                <h2>Model</h2>
+                <div class="value"><span class="chip {model_class}">{model_state}</span></div>
+                <div class="meta">Device: {device}</div>
+                <div class="meta">Load time: {load_time_str}</div>
+                <div class="meta">Uptime: {uptime_str}</div>
+            </article>
+            <article class="stat-card">
+                <h2>Sessions</h2>
+                <div class="value">{len(sessions)}</div>
+                <div class="meta">Active streaming sessions tracked in memory</div>
+            </article>
+            <article class="stat-card">
+                <h2>Active Tasks</h2>
+                <div class="value">{len(active_tasks)}</div>
+                <div class="meta">Queued + running inference jobs</div>
+            </article>
+            <article class="stat-card">
+                <h2>Completed Tasks</h2>
+                <div class="value">{len(completed_tasks)}</div>
+                <div class="meta">Finished jobs retained in task history</div>
+            </article>
+            <article class="stat-card">
+                <h2>Model Directory</h2>
+                <div class="meta" style="word-break: break-all;">{model_dir}</div>
+            </article>
+        </section>
+
+        <section class="layout">
+            <article class="panel">
+                <h3>Streaming Sessions</h3>
+                <div class="stack">
+                    {session_cards_html}
                 </div>
-                <div class="status-item">
-                    <span>Completed Tasks:</span>
-                    <span class="status-value">{len(completed_tasks)}</span>
-                </div>
-                <div class="status-item">
-                    <span>Total Tasks:</span>
-                    <span class="status-value">{len(_tasks)}</span>
-                </div>
+            </article>
+
+            <div class="stack">
+                <article class="panel">
+                    <h3>Active Tasks</h3>
+                    <div class="stack">
+                        {active_tasks_html}
+                    </div>
+                </article>
+                <article class="panel">
+                    <h3>Recent Completed Tasks</h3>
+                    <div class="stack">
+                        {completed_tasks_html}
+                    </div>
+                </article>
             </div>
-        </div>
-
-        <div class="tasks-section">
-            <h3>Active Tasks</h3>
-            <button class="refresh-btn" onclick="location.reload()">Refresh</button>
-            <label class="auto-refresh">
-                <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> Auto-refresh (5s)
-            </label>
-            <div class="timestamp">Last updated: <span id="lastUpdate">{time.strftime('%Y-%m-%d %H:%M:%S')}</span></div>
-
-            {active_tasks_html}
-        </div>
-
-        <div class="tasks-section">
-            <h3>Recent Completed Tasks</h3>
-            {completed_tasks_html}
-        </div>
-    </div>
+        </section>
+    </main>
 
     <script>
-        let autoRefreshInterval;
+        let autoRefreshInterval = null;
 
         function toggleAutoRefresh() {{
-            const checkbox = document.getElementById('autoRefresh');
+            const checkbox = document.getElementById("autoRefresh");
             if (checkbox.checked) {{
                 autoRefreshInterval = setInterval(() => {{
                     location.reload();
                 }}, 5000);
-            }} else {{
+            }} else if (autoRefreshInterval) {{
                 clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
             }}
         }}
 
-        // Update timestamp every second
         setInterval(() => {{
             const now = new Date();
-            document.getElementById('lastUpdate').textContent = now.toLocaleString();
+            const stamp = document.getElementById("lastUpdate");
+            if (stamp) {{
+                stamp.textContent = now.toLocaleString();
+            }}
         }}, 1000);
     </script>
 </body>
@@ -1175,45 +1650,294 @@ def create_app(model_dir: str, device: str = "cuda", gallery_dir: Optional[str] 
 
         return status
 
+    @_app.post("/v1/sessions", response_model=SessionCreateResponse)
+    async def create_session(request: SessionCreateRequest):
+        """Create a streaming session for edge frame uploads."""
+        if _session_root is None:
+            raise HTTPException(status_code=500, detail="Session storage is not initialized")
+        session_id = f"sess_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        session_dir = os.path.join(_session_root, session_id)
+        frames_dir = os.path.join(session_dir, "frames")
+        os.makedirs(frames_dir, exist_ok=True)
+
+        config = dict(request.config or {})
+        chunk_size = _safe_positive_int(
+            config.get("chunk_size"), STREAM_DEFAULT_CHUNK_SIZE, minimum=1, maximum=256
+        )
+        max_inflight_chunks = _safe_positive_int(
+            config.get("max_inflight_chunks"), STREAM_DEFAULT_MAX_INFLIGHT, minimum=1, maximum=8
+        )
+        auto_flush = bool(config.get("auto_flush", False))
+        created_at = time.time()
+        with _stream_lock:
+            _stream_sessions[session_id] = {
+                "session_id": session_id,
+                "robot_id": request.robot_id,
+                "camera": request.camera,
+                "config": config,
+                "created_at": created_at,
+                "session_dir": session_dir,
+                "frames_dir": frames_dir,
+                "frames": [],
+                "next_upload_index": 0,
+                "frame_count": 0,
+                "next_frame_index": 0,
+                "next_chunk_id": 0,
+                "inflight_task_ids": [],
+                "completed_chunks": 0,
+                "failed_chunks": 0,
+                "chunk_size": chunk_size,
+                "max_inflight_chunks": max_inflight_chunks,
+                "auto_flush": auto_flush,
+                "flush_requested": False,
+                "latest_frame_path": None,
+                "latest_chunk": None,
+                "map_pointer": None,
+                "last_inference_at": None,
+                "worker_state": "idle",
+                "events": [],
+            }
+            _append_session_event(
+                _stream_sessions[session_id],
+                "session_created",
+                {
+                    "robot_id": request.robot_id,
+                    "chunk_size": chunk_size,
+                    "max_inflight_chunks": max_inflight_chunks,
+                    "auto_flush": auto_flush,
+                },
+            )
+
+        return SessionCreateResponse(
+            session_id=session_id,
+            upload_url=f"/v1/sessions/{session_id}/frames",
+            events_url=f"/v1/sessions/{session_id}/events",
+            map_url=f"/v1/sessions/{session_id}/map/latest",
+            created_at=created_at,
+        )
+
+    @_app.get("/v1/sessions")
+    async def list_sessions():
+        """List active streaming sessions."""
+        with _stream_lock:
+            sessions = []
+            for s in _stream_sessions.values():
+                sessions.append(
+                    {
+                        "session_id": s["session_id"],
+                        "robot_id": s["robot_id"],
+                        "created_at": s["created_at"],
+                        "frame_count": s["frame_count"],
+                        "pending_frames": _pending_stream_frames(s),
+                        "inflight_chunks": len(s["inflight_task_ids"]),
+                        "completed_chunks": s["completed_chunks"],
+                        "failed_chunks": s["failed_chunks"],
+                        "worker_state": s["worker_state"],
+                    }
+                )
+        return {"total": len(sessions), "sessions": sessions}
+
+    @_app.get("/v1/sessions/{session_id}")
+    async def get_session(session_id: str):
+        """Get session metadata."""
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            return {
+                "session_id": session["session_id"],
+                "robot_id": session["robot_id"],
+                "created_at": session["created_at"],
+                "camera": session["camera"],
+                "config": session["config"],
+                "frame_count": session["frame_count"],
+                "pending_frames": _pending_stream_frames(session),
+                "chunk_size": session["chunk_size"],
+                "max_inflight_chunks": session["max_inflight_chunks"],
+                "auto_flush": session["auto_flush"],
+                "inflight_chunks": len(session["inflight_task_ids"]),
+                "completed_chunks": session["completed_chunks"],
+                "failed_chunks": session["failed_chunks"],
+                "latest_frame_path": session["latest_frame_path"],
+                "latest_chunk": session["latest_chunk"],
+                "map_pointer": session["map_pointer"],
+                "last_inference_at": session["last_inference_at"],
+                "worker_state": session["worker_state"],
+            }
+
+    @_app.post("/v1/sessions/{session_id}/frames", response_model=FrameUploadResponse)
+    async def upload_frame(
+        session_id: str,
+        frame: UploadFile = File(...),
+        frame_id: Optional[str] = Form(None),
+        timestamp_ns: Optional[int] = Form(None),
+        prior_pose_json: Optional[str] = Form(None),
+    ):
+        """
+        Upload a single frame to a session.
+
+        This endpoint is intentionally lightweight for MVP ingestion:
+        it stores frame bytes and records metadata for downstream workers.
+        """
+        frame_bytes = await frame.read()
+        if not frame_bytes:
+            raise HTTPException(status_code=400, detail="Empty frame payload")
+
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            frame_index = int(session.get("next_upload_index", session["frame_count"]))
+            session["next_upload_index"] = frame_index + 1
+            frames_dir = session["frames_dir"]
+
+        safe_frame_id = _safe_name(frame_id, f"{frame_index:06d}")
+        ext = os.path.splitext(frame.filename or "")[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+            ext = ".jpg"
+
+        file_name = f"{frame_index:06d}_{safe_frame_id}{ext}"
+        frame_path = os.path.join(frames_dir, file_name)
+        with open(frame_path, "wb") as f:
+            f.write(frame_bytes)
+
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            session["frame_count"] = len(session["frames"]) + 1
+            session["latest_frame_path"] = frame_path
+            session["frames"].append(
+                {
+                    "frame_index": frame_index,
+                    "frame_id": frame_id,
+                    "timestamp_ns": timestamp_ns,
+                    "frame_path": frame_path,
+                    "has_prior_pose": bool(prior_pose_json),
+                }
+            )
+            _append_session_event(
+                session,
+                "frame_uploaded",
+                {
+                    "frame_index": frame_index,
+                    "frame_id": frame_id,
+                    "timestamp_ns": timestamp_ns,
+                    "frame_path": frame_path,
+                    "has_prior_pose": bool(prior_pose_json),
+                },
+            )
+            auto_flush = bool(session["auto_flush"])
+            total_frames = int(session["frame_count"])
+
+        queued_tasks = _schedule_stream_inference(session_id, force=auto_flush)
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            pending_frames = _pending_stream_frames(session) if session is not None else 0
+
+        return FrameUploadResponse(
+            success=True,
+            session_id=session_id,
+            frame_index=frame_index,
+            frame_path=frame_path,
+            total_frames=total_frames,
+            queued_tasks=queued_tasks,
+            pending_frames=pending_frames,
+        )
+
+    @_app.get("/v1/sessions/{session_id}/events")
+    async def get_session_events(session_id: str, limit: int = 100):
+        """Get recent session events (MVP polling endpoint)."""
+        limit = max(1, min(limit, 1000))
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            events = session["events"][-limit:]
+        return {"session_id": session_id, "events": events, "count": len(events)}
+
+    @_app.post("/v1/sessions/{session_id}/flush")
+    async def flush_session(session_id: str):
+        """
+        Force scheduling of pending frames, even when chunk is incomplete.
+
+        Useful for low-FPS streams and explicit end-of-segment flushes.
+        """
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            pending_before = _pending_stream_frames(session)
+            inflight_before = len(session["inflight_task_ids"])
+            session["flush_requested"] = True
+
+        queued_tasks = _schedule_stream_inference(session_id, force=True)
+
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            pending_after = _pending_stream_frames(session)
+            inflight_after = len(session["inflight_task_ids"])
+            if pending_after <= 0 and inflight_after <= 0:
+                session["flush_requested"] = False
+            _append_session_event(
+                session,
+                "session_flushed",
+                {
+                    "queued_tasks": queued_tasks,
+                    "pending_before": pending_before,
+                    "pending_after": pending_after,
+                    "inflight_before": inflight_before,
+                    "inflight_after": inflight_after,
+                },
+            )
+
+        return {
+            "session_id": session_id,
+            "queued_tasks": queued_tasks,
+            "pending_before": pending_before,
+            "pending_after": pending_after,
+            "inflight_before": inflight_before,
+            "inflight_after": inflight_after,
+        }
+
+    @_app.get("/v1/sessions/{session_id}/map/latest")
+    async def get_latest_map(session_id: str):
+        """Return latest map snapshot metadata for the session pipeline."""
+        with _stream_lock:
+            session = _stream_sessions.get(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            pending = _pending_stream_frames(session)
+            inflight = len(session["inflight_task_ids"])
+            if session["map_pointer"] is not None:
+                status = "ready"
+            elif pending > 0 or inflight > 0:
+                status = "processing"
+            else:
+                status = "idle"
+            return {
+                "session_id": session_id,
+                "status": status,
+                "frame_count": session["frame_count"],
+                "pending_frames": pending,
+                "inflight_chunks": inflight,
+                "completed_chunks": session["completed_chunks"],
+                "failed_chunks": session["failed_chunks"],
+                "latest_frame_path": session["latest_frame_path"],
+                "latest_chunk": session["latest_chunk"],
+                "last_inference_at": session["last_inference_at"],
+                "map_pointer": session["map_pointer"],
+            }
+
     @_app.post("/inference", response_model=InferenceResponse)
     async def run_inference(request: InferenceRequest):
         """Submit inference task and return task ID."""
-        global _running_task_id
-
         if _backend is None:
             raise HTTPException(status_code=500, detail="Backend not initialized")
 
-        # Generate unique task ID
-        task_id = str(uuid.uuid4())
-
-        # Create task status
-        if _running_task_id is not None:
-            status_msg = f"[{task_id}] Task queued (waiting for {_running_task_id} to complete)"
-        else:
-            status_msg = f"[{task_id}] Task submitted"
-
-        _tasks[task_id] = TaskStatus(
-            task_id=task_id,
-            status="pending",
-            message=status_msg,
-            created_at=time.time(),
-            export_dir=request.export_dir,
-            request=request,
-            # Record essential parameters
-            num_images=len(request.image_paths),
-            export_format=request.export_format,
-            process_res_method=request.process_res_method,
-            video_path=(
-                request.image_paths[0] if request.image_paths else None
-            ),  # Use first image path as video reference
-        )
-
-        # Add task to queue
-        _task_queue.append(task_id)
-
-        # If no task is running, start processing the queue
-        if _running_task_id is None:
-            _process_next_task()
+        task_id = _enqueue_inference_task(request=request, task_kind="manual")
 
         return InferenceResponse(
             success=True,

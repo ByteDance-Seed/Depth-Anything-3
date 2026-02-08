@@ -40,6 +40,61 @@ class InferenceService:
             self.model = DepthAnything3.from_pretrained(self.model_dir).to(self.device)
         return self.model
 
+    @staticmethod
+    def _normalize_export_feat_layers(export_feat_layers: Optional[List[int]]) -> List[int]:
+        """Normalize optional export feature layer list."""
+        return list(export_feat_layers or [])
+
+    @staticmethod
+    def _build_common_inference_params(
+        export_format: str,
+        process_res: int,
+        process_res_method: str,
+        export_feat_layers: List[int],
+        align_to_input_ext_scale: bool,
+        use_ray_pose: bool,
+        ref_view_strategy: str,
+        conf_thresh_percentile: float,
+        num_max_points: int,
+        show_cameras: bool,
+        feat_vis_fps: int,
+    ) -> Dict[str, Any]:
+        """Build inference options shared between local and backend modes."""
+        return {
+            "export_format": export_format,
+            "process_res": process_res,
+            "process_res_method": process_res_method,
+            "export_feat_layers": export_feat_layers,
+            "align_to_input_ext_scale": align_to_input_ext_scale,
+            "use_ray_pose": use_ray_pose,
+            "ref_view_strategy": ref_view_strategy,
+            "conf_thresh_percentile": conf_thresh_percentile,
+            "num_max_points": num_max_points,
+            "show_cameras": show_cameras,
+            "feat_vis_fps": feat_vis_fps,
+        }
+
+    @staticmethod
+    def _attach_pose_data(
+        payload: Dict[str, Any],
+        extrinsics: Optional[np.ndarray],
+        intrinsics: Optional[np.ndarray],
+        json_compatible: bool,
+    ) -> None:
+        """Attach pose data to payload (encoded for JSON when needed)."""
+        if extrinsics is not None:
+            payload["extrinsics"] = (
+                [ext.astype(np.float64).tolist() for ext in extrinsics]
+                if json_compatible
+                else extrinsics
+            )
+        if intrinsics is not None:
+            payload["intrinsics"] = (
+                [intr.astype(np.float64).tolist() for intr in intrinsics]
+                if json_compatible
+                else intrinsics
+            )
+
     def run_local_inference(
         self,
         image_paths: List[str],
@@ -59,33 +114,33 @@ class InferenceService:
         feat_vis_fps: int = 15,
     ) -> Any:
         """Run local inference"""
-        if export_feat_layers is None:
-            export_feat_layers = []
+        export_feat_layers = self._normalize_export_feat_layers(export_feat_layers)
 
         model = self.load_model()
-
-        # Prepare inference parameters
+        common_params = self._build_common_inference_params(
+            export_format=export_format,
+            process_res=process_res,
+            process_res_method=process_res_method,
+            export_feat_layers=export_feat_layers,
+            align_to_input_ext_scale=align_to_input_ext_scale,
+            use_ray_pose=use_ray_pose,
+            ref_view_strategy=ref_view_strategy,
+            conf_thresh_percentile=conf_thresh_percentile,
+            num_max_points=num_max_points,
+            show_cameras=show_cameras,
+            feat_vis_fps=feat_vis_fps,
+        )
         inference_kwargs = {
             "image": image_paths,
             "export_dir": export_dir,
-            "export_format": export_format,
-            "process_res": process_res,
-            "process_res_method": process_res_method,
-            "export_feat_layers": export_feat_layers,
-            "align_to_input_ext_scale": align_to_input_ext_scale,
-            "use_ray_pose": use_ray_pose,
-            "ref_view_strategy": ref_view_strategy,
-            "conf_thresh_percentile": conf_thresh_percentile,
-            "num_max_points": num_max_points,
-            "show_cameras": show_cameras,
-            "feat_vis_fps": feat_vis_fps,
+            **common_params,
         }
-
-        # Add pose data (if exists)
-        if extrinsics is not None:
-            inference_kwargs["extrinsics"] = extrinsics
-        if intrinsics is not None:
-            inference_kwargs["intrinsics"] = intrinsics
+        self._attach_pose_data(
+            inference_kwargs,
+            extrinsics=extrinsics,
+            intrinsics=intrinsics,
+            json_compatible=False,
+        )
 
         # Run inference
         typer.echo(f"Running inference on {len(image_paths)} images...")
@@ -116,35 +171,36 @@ class InferenceService:
         feat_vis_fps: int = 15,
     ) -> Dict[str, Any]:
         """Run backend inference"""
-        if export_feat_layers is None:
-            export_feat_layers = []
+        export_feat_layers = self._normalize_export_feat_layers(export_feat_layers)
 
         # Check backend status
         if not self._check_backend_status(backend_url):
             raise typer.BadParameter(f"Backend service is not running at {backend_url}")
 
-        # Prepare payload
+        common_params = self._build_common_inference_params(
+            export_format=export_format,
+            process_res=process_res,
+            process_res_method=process_res_method,
+            export_feat_layers=export_feat_layers,
+            align_to_input_ext_scale=align_to_input_ext_scale,
+            use_ray_pose=use_ray_pose,
+            ref_view_strategy=ref_view_strategy,
+            conf_thresh_percentile=conf_thresh_percentile,
+            num_max_points=num_max_points,
+            show_cameras=show_cameras,
+            feat_vis_fps=feat_vis_fps,
+        )
         payload = {
             "image_paths": image_paths,
             "export_dir": export_dir,
-            "export_format": export_format,
-            "process_res": process_res,
-            "process_res_method": process_res_method,
-            "export_feat_layers": export_feat_layers,
-            "align_to_input_ext_scale": align_to_input_ext_scale,
-            "use_ray_pose": use_ray_pose,
-            "ref_view_strategy": ref_view_strategy,
-            "conf_thresh_percentile": conf_thresh_percentile,
-            "num_max_points": num_max_points,
-            "show_cameras": show_cameras,
-            "feat_vis_fps": feat_vis_fps,
+            **common_params,
         }
-
-        # Add pose data (if exists)
-        if extrinsics is not None:
-            payload["extrinsics"] = [ext.astype(np.float64).tolist() for ext in extrinsics]
-        if intrinsics is not None:
-            payload["intrinsics"] = [intr.astype(np.float64).tolist() for intr in intrinsics]
+        self._attach_pose_data(
+            payload,
+            extrinsics=extrinsics,
+            intrinsics=intrinsics,
+            json_compatible=True,
+        )
 
         # Submit task
         typer.echo("Submitting inference task to backend...")
@@ -165,14 +221,14 @@ class InferenceService:
                     f"Backend inference submission failed: {result['message']}"
                 )
         except requests.exceptions.RequestException as e:
-            raise typer.BadParameter(f"Backend inference submission failed: {e}")
+            raise typer.BadParameter(f"Backend inference submission failed: {e}") from e
 
     def _check_backend_status(self, backend_url: str) -> bool:
         """Check backend status"""
         try:
             response = requests.get(f"{backend_url}/status", timeout=5)
             return response.status_code == 200
-        except Exception:
+        except requests.exceptions.RequestException:
             return False
 
 
@@ -199,41 +255,32 @@ def run_inference(
     """Unified inference interface"""
 
     service = InferenceService(model_dir, device)
+    common_kwargs = {
+        "export_format": export_format,
+        "process_res": process_res,
+        "process_res_method": process_res_method,
+        "export_feat_layers": export_feat_layers,
+        "extrinsics": extrinsics,
+        "intrinsics": intrinsics,
+        "align_to_input_ext_scale": align_to_input_ext_scale,
+        "use_ray_pose": use_ray_pose,
+        "ref_view_strategy": ref_view_strategy,
+        "conf_thresh_percentile": conf_thresh_percentile,
+        "num_max_points": num_max_points,
+        "show_cameras": show_cameras,
+        "feat_vis_fps": feat_vis_fps,
+    }
 
     if backend_url:
         return service.run_backend_inference(
             image_paths=image_paths,
             export_dir=export_dir,
             backend_url=backend_url,
-            export_format=export_format,
-            process_res=process_res,
-            process_res_method=process_res_method,
-            export_feat_layers=export_feat_layers,
-            extrinsics=extrinsics,
-            intrinsics=intrinsics,
-            align_to_input_ext_scale=align_to_input_ext_scale,
-            use_ray_pose=use_ray_pose,
-            ref_view_strategy=ref_view_strategy,
-            conf_thresh_percentile=conf_thresh_percentile,
-            num_max_points=num_max_points,
-            show_cameras=show_cameras,
-            feat_vis_fps=feat_vis_fps,
+            **common_kwargs,
         )
-    else:
-        return service.run_local_inference(
-            image_paths=image_paths,
-            export_dir=export_dir,
-            export_format=export_format,
-            process_res=process_res,
-            process_res_method=process_res_method,
-            export_feat_layers=export_feat_layers,
-            extrinsics=extrinsics,
-            intrinsics=intrinsics,
-            align_to_input_ext_scale=align_to_input_ext_scale,
-            use_ray_pose=use_ray_pose,
-            ref_view_strategy=ref_view_strategy,
-            conf_thresh_percentile=conf_thresh_percentile,
-            num_max_points=num_max_points,
-            show_cameras=show_cameras,
-            feat_vis_fps=feat_vis_fps,
-        )
+
+    return service.run_local_inference(
+        image_paths=image_paths,
+        export_dir=export_dir,
+        **common_kwargs,
+    )

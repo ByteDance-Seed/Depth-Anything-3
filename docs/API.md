@@ -463,3 +463,30 @@ if hasattr(prediction, 'intrinsics'):
 if hasattr(prediction, 'aux') and 'feat_layer_0' in prediction.aux:
     features = prediction.aux['feat_layer_0']
 ```
+
+## 🌐 Streaming Session API (Experimental)
+
+When running the backend service (`da3 backend`), the following HTTP endpoints are available for edge-to-cloud streaming workflows:
+
+- `POST /v1/sessions`  
+  Create a new stream session.
+- `GET /v1/sessions`  
+  List active sessions.
+- `GET /v1/sessions/{session_id}`  
+  Inspect one session.
+- `POST /v1/sessions/{session_id}/frames`  
+  Upload a frame (`multipart/form-data`) with optional metadata (`frame_id`, `timestamp_ns`, `prior_pose_json`).  
+  Uploaded frames are consumed by a session worker that schedules chunked inference tasks.
+- `GET /v1/sessions/{session_id}/events`  
+  Poll recent session events.
+- `POST /v1/sessions/{session_id}/flush`  
+  Force scheduling of pending frames even if the current chunk is incomplete.
+- `GET /v1/sessions/{session_id}/map/latest`  
+  Fetch latest snapshot metadata (`pending_frames`, `inflight_chunks`, `latest_chunk`, `map_pointer`).
+
+Session config supports worker controls:
+- `chunk_size` (default: `8`)
+- `max_inflight_chunks` (default: `1`)
+- `auto_flush` (default: `false`)
+
+This API now includes queue-driven stream inference scheduling and emits chunk-level lifecycle events (`inference_chunk_queued`, `inference_chunk_completed`, `inference_chunk_failed`, `map_chunk`).

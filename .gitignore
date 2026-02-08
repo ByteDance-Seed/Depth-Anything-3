@@ -33,3 +33,7 @@ input_images*/
 src/debug_main.py
 temp*.png
 /outputs
+
+# Multi-agent coordination runtime state
+coordination/swarm_state.json
+coordination/.swarm_state.lock
