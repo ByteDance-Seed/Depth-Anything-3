@@ -201,6 +201,7 @@ Model = create_object(load_config("path/to/new/config"))
 - 🖥️ [Command Line Interface](docs/CLI.md)
 - 📑 [Python API](docs/API.md)
 - 📊 [Benchmark Evaluation](docs/BENCHMARK.md)
+- 🐧 [Linux aarch64 Setup](docs/SETUP_LINUX_AARCH64.md)
 
 ## 🗂️ Model Cards
 
