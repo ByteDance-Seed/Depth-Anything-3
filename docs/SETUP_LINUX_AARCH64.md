@@ -100,6 +100,10 @@ Run this when you need `--export-format colmap` support:
 bash scripts/setup/build_pycolmap_aarch64.sh
 ```
 
+Notes:
+- For Python `<3.10`, the script automatically uses `COLMAP_REF=3.13.0` (compatible with `pycolmap` on Python 3.9).
+- You can override the target ref, for example: `COLMAP_REF=3.13.0 bash scripts/setup/build_pycolmap_aarch64.sh`
+
 Then verify:
 
 ```bash
@@ -110,20 +114,38 @@ print('pycolmap:', pycolmap.__version__)
 PY
 ```
 
-### 6.1 If build stops at OpenImageIO not found
+### 6.1 If build stops at OpenImageIO/OpenCV checks
 
-If CMake shows:
-`Could not find a package configuration file provided by "OpenImageIO"`
+If CMake shows one of these:
 
-install missing package and rerun:
+- `Could not find a package configuration file provided by "OpenImageIO"`
+- `OpenImageIO::iconvert ... /usr/bin/iconvert ... does not exist`
+- `OpenImageIO::OpenImageIO includes non-existent path "/usr/include/opencv4"`
+
+install missing packages and rerun:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y libopenimageio-dev
+sudo apt-get install -y libopenimageio-dev openimageio-tools libopencv-dev
 bash scripts/setup/build_pycolmap_aarch64.sh
 ```
 
 If you have a broken third-party apt source (for example certificate errors from unrelated repos), disable that source first and retry `apt-get update`.
+
+### 6.2 If build fails at pycolmap install path/version
+
+If you see:
+
+- `Directory '.../colmap-src/python' is not installable. Neither 'setup.py' nor 'pyproject.toml' found.`
+- `ERROR: Package 'pycolmap' requires a different Python: ...`
+
+the script now auto-detects the correct package path (`colmap-src/`, `colmap-src/python`, or `colmap-src/pycolmap`) and auto-selects `COLMAP_REF=3.13.0` on Python 3.9.
+
+If needed, rerun explicitly with:
+
+```bash
+COLMAP_REF=3.13.0 bash scripts/setup/build_pycolmap_aarch64.sh
+```
 
 ## 7. Notes for GPU servers on aarch64
 
