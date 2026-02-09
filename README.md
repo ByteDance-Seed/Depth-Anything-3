@@ -202,6 +202,7 @@ Model = create_object(load_config("path/to/new/config"))
 - 📑 [Python API](docs/API.md)
 - 📊 [Benchmark Evaluation](docs/BENCHMARK.md)
 - 🐧 [Linux aarch64 Setup](docs/SETUP_LINUX_AARCH64.md)
+- 🤖 [Raspberry Pi Stream Quickstart](docs/RASPI_STREAM_QUICKSTART.md)
 
 ## 🗂️ Model Cards
 
