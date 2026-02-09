@@ -110,6 +110,21 @@ print('pycolmap:', pycolmap.__version__)
 PY
 ```
 
+### 6.1 If build stops at OpenImageIO not found
+
+If CMake shows:
+`Could not find a package configuration file provided by "OpenImageIO"`
+
+install missing package and rerun:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libopenimageio-dev
+bash scripts/setup/build_pycolmap_aarch64.sh
+```
+
+If you have a broken third-party apt source (for example certificate errors from unrelated repos), disable that source first and retry `apt-get update`.
+
 ## 7. Notes for GPU servers on aarch64
 
 - Some aarch64 environments use vendor-specific PyTorch/CUDA wheels (for example Jetson-style stacks).

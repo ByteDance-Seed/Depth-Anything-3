@@ -20,7 +20,7 @@ sudo apt-get install -y \
   cmake ninja-build \
   libeigen3-dev libboost-program-options-dev libboost-graph-dev \
   libboost-system-dev libboost-filesystem-dev \
-  libsuitesparse-dev libfreeimage-dev libmetis-dev \
+  libsuitesparse-dev libfreeimage-dev libmetis-dev libopenimageio-dev \
   libgoogle-glog-dev libgflags-dev libglew-dev \
   qtbase5-dev libqt5opengl5-dev libcgal-dev libceres-dev
 
