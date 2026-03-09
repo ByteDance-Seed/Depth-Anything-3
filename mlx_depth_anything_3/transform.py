@@ -144,7 +144,10 @@ def mat_to_quat(matrix: mx.array) -> mx.array:
 
     # Select best-conditioned quaternion
     best_idx = mx.argmax(q_abs, axis=-1)
-    one_hot = mx.one_hot(best_idx, 4)
+    # Manual one-hot: compare each position with best_idx
+    indices = mx.arange(4)
+    # Broadcast: best_idx (...,1) vs indices (4,)
+    one_hot = (mx.expand_dims(best_idx, -1) == indices).astype(q_abs.dtype)
     mask = one_hot > 0.5
     # Gather the selected quaternion for each batch element
     out = mx.sum(quat_candidates * mx.expand_dims(mask, -1), axis=-2)

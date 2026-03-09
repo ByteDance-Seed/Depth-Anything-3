@@ -60,7 +60,7 @@ public struct DA3Config {
 
     public static let da3Large = DA3Config(
         backboneName: "vitl", embedDim: 1024, depth: 24, numHeads: 16,
-        outLayers: [11, 15, 19, 23], altStart: 4, qknormStart: 4, ropeStart: 4,
+        outLayers: [11, 15, 19, 23], altStart: 8, qknormStart: 8, ropeStart: 8,
         catToken: true, ffnLayer: "mlp",
         headDimIn: 2048, headOutputDim: 2, headFeatures: 256,
         headOutChannels: [256, 512, 1024, 1024],
@@ -69,10 +69,10 @@ public struct DA3Config {
 
     public static let da3Giant = DA3Config(
         backboneName: "vitg", embedDim: 1536, depth: 40, numHeads: 24,
-        outLayers: [19, 25, 31, 39], altStart: 4, qknormStart: 4, ropeStart: 4,
+        outLayers: [19, 27, 33, 39], altStart: 13, qknormStart: 13, ropeStart: 13,
         catToken: true, ffnLayer: "swiglu",
-        headDimIn: 3072, headOutputDim: 2, headFeatures: 384,
-        headOutChannels: [384, 768, 1536, 1536],
+        headDimIn: 3072, headOutputDim: 2, headFeatures: 256,
+        headOutChannels: [256, 512, 1024, 1024],
         camEncDimOut: 1536, camDecDimIn: 3072, patchSize: 14
     )
 }
