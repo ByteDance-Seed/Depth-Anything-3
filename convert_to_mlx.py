@@ -35,7 +35,7 @@ def load_pytorch_weights(path: str) -> dict[str, np.ndarray]:
         return weights
     else:
         import torch
-        state_dict = torch.load(path, map_location="cpu", weights_only=True)
+        state_dict = torch.load(path, map_location="cpu", weights_only=False)
         if "model" in state_dict:
             state_dict = state_dict["model"]
         return {k: v.numpy() for k, v in state_dict.items()}

@@ -206,7 +206,7 @@ class Attention(nn.Module):
         q = q * self.scale
         attn = q @ mx.transpose(k, axes=(0, 1, 3, 2))  # (B, heads, N, N)
         if attn_mask is not None:
-            # attn_mask: (B, N, N) -> (B, heads, N, N)
+            # attn_mask: (B, N, N) boolean. True = attend, False = block.
             mask = mx.expand_dims(attn_mask, 1)
             mask = mx.broadcast_to(mask, attn.shape)
             attn = attn + mx.where(mask, mx.zeros_like(attn), mx.full(attn.shape, -1e9))

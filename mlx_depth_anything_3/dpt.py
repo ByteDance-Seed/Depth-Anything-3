@@ -164,13 +164,13 @@ class DualDPT(nn.Module):
         self.output_conv2_b = nn.Conv2d(head_features_2, output_dim,
                                          kernel_size=1, stride=1, padding=0)
 
-        # Auxiliary fusion chain (for weight loading compatibility)
+        # Auxiliary fusion chain (loaded for weight compatibility only; not used in forward)
         self.refinenet4_aux = FeatureFusionBlock(features, has_residual=False)
         self.refinenet3_aux = FeatureFusionBlock(features, has_residual=True)
         self.refinenet2_aux = FeatureFusionBlock(features, has_residual=True)
         self.refinenet1_aux = FeatureFusionBlock(features, has_residual=True)
 
-        # Aux output conv1 (5-layer variant for level-3)
+        # Aux output layers (loaded for weight compatibility only; not used in forward)
         self.output_conv1_aux = [
             self._make_aux_out1(head_features_1)
             for _ in range(4)

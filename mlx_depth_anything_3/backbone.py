@@ -264,7 +264,10 @@ class DinoVisionTransformer(nn.Module):
                 g_pos = pos_nodiff
                 l_pos = pos
 
-            # Reference view selection (before alt_start)
+            # Reference view selection (before alt_start).
+            # Skipped when external camera tokens are provided, because the
+            # camera encoder already supplies per-view conditioning so
+            # feature-based reordering is unnecessary.
             if (self.alt_start != -1 and i == self.alt_start - 1
                     and x_tok.shape[1] >= THRESH_FOR_REF_SELECTION
                     and cam_token is None):

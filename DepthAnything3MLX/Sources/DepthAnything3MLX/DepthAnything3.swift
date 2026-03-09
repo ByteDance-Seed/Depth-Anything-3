@@ -409,7 +409,8 @@ class TransformerBlock: Module {
     let attn: AttentionLayer
     let ls1: LayerScaleLayer?
     let norm2: LayerNorm
-    let mlp: Module
+    let mlpLayer: MlpLayer?
+    let swiGluLayer: SwiGLUFFNLayer?
     let ls2: LayerScaleLayer?
 
     init(dim: Int, numHeads: Int, mlpRatio: Float = 4.0, qkvBias: Bool = false,
@@ -425,11 +426,13 @@ class TransformerBlock: Module {
         norm2 = LayerNorm(dimensions: dim, eps: 1e-6)
         let mlpHidden = Int(Float(dim) * mlpRatio)
         if ffnLayer == "swiglu" {
-            mlp = SwiGLUFFNLayer(
+            mlpLayer = nil
+            swiGluLayer = SwiGLUFFNLayer(
                 inFeatures: dim, hiddenFeatures: mlpHidden, outFeatures: dim, bias: ffnBias)
         } else {
-            mlp = MlpLayer(
+            mlpLayer = MlpLayer(
                 inFeatures: dim, hiddenFeatures: mlpHidden, outFeatures: dim, bias: ffnBias)
+            swiGluLayer = nil
         }
         ls2 = initValues != nil ? LayerScaleLayer(dim: dim, initValues: initValues!) : nil
     }
@@ -440,7 +443,12 @@ class TransformerBlock: Module {
         var attnOut = attn(norm1(x), pos: pos, attnMask: attnMask)
         if let l = ls1 { attnOut = l(attnOut) }
         var h = x + attnOut
-        var ffnOut = (mlp as! any UnaryLayer).callAsFunction(norm2(h))
+        var ffnOut: MLXArray
+        if let swiglu = swiGluLayer {
+            ffnOut = swiglu(norm2(h))
+        } else {
+            ffnOut = mlpLayer!(norm2(h))
+        }
         if let l = ls2 { ffnOut = l(ffnOut) }
         h = h + ffnOut
         return h

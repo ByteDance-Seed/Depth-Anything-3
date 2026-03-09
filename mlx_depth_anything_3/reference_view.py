@@ -96,12 +96,12 @@ def reorder_by_reference(x: mx.array, b_idx: mx.array) -> mx.array:
     # Fix: for positions > 0 and <= b_idx, we already set positions-1, which is correct
     # For position 0, we set b_idx, which is correct
 
-    # Gather
-    results = []
-    for b in range(B):
-        idx = reorder_indices[b]
-        results.append(x[b][idx])
-    return mx.stack(results)
+    # Gather using take_along_axis
+    # Expand indices to match x's extra dimensions
+    idx_shape = list(reorder_indices.shape) + [1] * (x.ndim - 2)
+    idx_expanded = mx.reshape(reorder_indices, idx_shape)
+    idx_expanded = mx.broadcast_to(idx_expanded, list(reorder_indices.shape) + list(x.shape[2:]))
+    return mx.take_along_axis(x, idx_expanded, axis=1)
 
 
 def restore_original_order(x: mx.array, b_idx: mx.array) -> mx.array:
@@ -131,8 +131,8 @@ def restore_original_order(x: mx.array, b_idx: mx.array) -> mx.array:
     ref_mask = positions == b_idx_expanded
     restore_indices = mx.where(ref_mask, mx.zeros_like(restore_indices), restore_indices)
 
-    results = []
-    for b in range(B):
-        idx = restore_indices[b]
-        results.append(x[b][idx])
-    return mx.stack(results)
+    # Gather using take_along_axis
+    idx_shape = list(restore_indices.shape) + [1] * (x.ndim - 2)
+    idx_expanded = mx.reshape(restore_indices, idx_shape)
+    idx_expanded = mx.broadcast_to(idx_expanded, list(restore_indices.shape) + list(x.shape[2:]))
+    return mx.take_along_axis(x, idx_expanded, axis=1)
