@@ -13,6 +13,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlx_depth_anything_3.layers import (
+    ModuleList,
     bilinear_interpolate,
     create_uv_grid,
     position_grid_to_embed,
@@ -118,11 +119,11 @@ class DualDPT(nn.Module):
         self.output_dim = output_dim
 
         # Token pre-norm + per-stage 1x1 projection
-        self.norm = nn.LayerNorm(dim_in)
-        self.projects = [
+        self.norm = nn.LayerNorm(dim_in, eps=1e-6)
+        self.projects = ModuleList([
             nn.Conv2d(dim_in, oc, kernel_size=1, stride=1, padding=0)
             for oc in out_channels
-        ]
+        ])
 
         # Spatial resize layers (NHWC)
         # Stage 0: 4x upsample via ConvTranspose
@@ -171,34 +172,46 @@ class DualDPT(nn.Module):
         self.refinenet1_aux = FeatureFusionBlock(features, has_residual=True)
 
         # Aux output layers (loaded for weight compatibility only; not used in forward)
-        self.output_conv1_aux = [
-            self._make_aux_out1(head_features_1)
+        self.output_conv1_aux = ModuleList([
+            self._make_aux_out1_module(head_features_1)
             for _ in range(4)
-        ]
+        ])
 
         # Aux output conv2 per level (with LN)
-        self.output_conv2_aux = [
-            self._make_aux_out2(head_features_1 // 2, head_features_2)
+        self.output_conv2_aux = ModuleList([
+            self._make_aux_out2_module(head_features_1 // 2, head_features_2)
             for _ in range(4)
-        ]
+        ])
 
-    def _make_aux_out1(self, in_ch: int):
+    def _make_aux_out1_module(self, in_ch: int):
         """5-conv auxiliary pre-head stack."""
-        return [
-            nn.Conv2d(in_ch, in_ch // 2, kernel_size=3, stride=1, padding=1),
-            nn.Conv2d(in_ch // 2, in_ch, kernel_size=3, stride=1, padding=1),
-            nn.Conv2d(in_ch, in_ch // 2, kernel_size=3, stride=1, padding=1),
-            nn.Conv2d(in_ch // 2, in_ch, kernel_size=3, stride=1, padding=1),
-            nn.Conv2d(in_ch, in_ch // 2, kernel_size=3, stride=1, padding=1),
-        ]
+        class AuxOut1(nn.Module):
+            def __init__(self, in_ch):
+                super().__init__()
+                self.layers = [
+                    nn.Conv2d(in_ch, in_ch // 2, kernel_size=3, stride=1, padding=1),
+                    nn.Conv2d(in_ch // 2, in_ch, kernel_size=3, stride=1, padding=1),
+                    nn.Conv2d(in_ch, in_ch // 2, kernel_size=3, stride=1, padding=1),
+                    nn.Conv2d(in_ch // 2, in_ch, kernel_size=3, stride=1, padding=1),
+                    nn.Conv2d(in_ch, in_ch // 2, kernel_size=3, stride=1, padding=1),
+                ]
+            def __call__(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+        return AuxOut1(in_ch)
 
-    def _make_aux_out2(self, in_ch: int, mid_ch: int):
+    def _make_aux_out2_module(self, in_ch: int, mid_ch: int):
         """Aux final projection: conv3x3 -> LN -> ReLU -> conv1x1."""
-        return {
-            "conv1": nn.Conv2d(in_ch, mid_ch, kernel_size=3, stride=1, padding=1),
-            "ln": nn.LayerNorm(mid_ch),
-            "conv2": nn.Conv2d(mid_ch, 7, kernel_size=1, stride=1, padding=0),
-        }
+        class AuxOut2(nn.Module):
+            def __init__(self, in_ch, mid_ch):
+                super().__init__()
+                self.conv1 = nn.Conv2d(in_ch, mid_ch, kernel_size=3, stride=1, padding=1)
+                self.ln = nn.LayerNorm(mid_ch)
+                self.conv2 = nn.Conv2d(mid_ch, 7, kernel_size=1, stride=1, padding=0)
+            def __call__(self, x):
+                return self.conv2(nn.relu(self.ln(self.conv1(x))))
+        return AuxOut2(in_ch, mid_ch)
 
     def __call__(
         self,

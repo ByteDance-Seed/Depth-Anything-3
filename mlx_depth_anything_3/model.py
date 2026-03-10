@@ -134,4 +134,14 @@ class DepthAnything3Net(nn.Module):
 
         # Depth head
         output = self.head(feats, H, W, patch_start_idx=0)
+
+        # Refined camera parameters
+        # Take the camera token from the last backbone layer
+        cam_token_refined = feats[-1][1]
+        pose_encoding = self.cam_dec(cam_token_refined)
+        refined_ext, refined_int = pose_encoding_to_extri_intri(pose_encoding, (H, W))
+
+        output["intrinsics"] = refined_int
+        output["extrinsics"] = refined_ext
+
         return output

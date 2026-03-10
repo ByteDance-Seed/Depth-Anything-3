@@ -14,6 +14,33 @@ import mlx.nn as nn
 
 
 # ---------------------------------------------------------------------------
+# ModuleList helper
+# ---------------------------------------------------------------------------
+class ModuleList(nn.Module):
+    """Simple wrapper to register a list of modules in MLX."""
+
+    def __init__(self, modules: list[nn.Module]):
+        super().__init__()
+        for i, m in enumerate(modules):
+            setattr(self, str(i), m)
+        self._len = len(modules)
+
+    def __getitem__(self, i: int) -> nn.Module:
+        if i < 0:
+            i += self._len
+        if i < 0 or i >= self._len:
+            raise IndexError("ModuleList index out of range")
+        return getattr(self, str(i))
+
+    def __len__(self) -> int:
+        return self._len
+
+    def __iter__(self):
+        for i in range(self._len):
+            yield self[i]
+
+
+# ---------------------------------------------------------------------------
 # LayerScale
 # ---------------------------------------------------------------------------
 class LayerScale(nn.Module):
@@ -306,8 +333,8 @@ class CamAttention(nn.Module):
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.q_norm = nn.LayerNorm(self.head_dim) if qk_norm else None
-        self.k_norm = nn.LayerNorm(self.head_dim) if qk_norm else None
+        self.q_norm = nn.LayerNorm(self.head_dim, eps=1e-6) if qk_norm else None
+        self.k_norm = nn.LayerNorm(self.head_dim, eps=1e-6) if qk_norm else None
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
 
     def __call__(self, x: mx.array) -> mx.array:
@@ -335,10 +362,10 @@ class CamBlock(nn.Module):
     def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0,
                  init_values: float | None = None):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(dim, eps=1e-6)
         self.attn = CamAttention(dim, num_heads=num_heads, qkv_bias=True)
         self.ls1 = LayerScale(dim, init_values) if init_values else None
-        self.norm2 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         hidden = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=hidden, out_features=dim, bias=True)
         self.ls2 = LayerScale(dim, init_values) if init_values else None

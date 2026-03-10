@@ -8,7 +8,7 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlx_depth_anything_3.layers import CamBlock, Mlp
+from mlx_depth_anything_3.layers import CamBlock, Mlp, ModuleList
 from mlx_depth_anything_3.transform import (
     affine_inverse,
     extri_intri_to_pose_encoding,
@@ -40,13 +40,13 @@ class CameraEnc(nn.Module):
             out_features=dim_out,
             bias=True,
         )
-        self.token_norm = nn.LayerNorm(dim_out)
-        self.trunk = [
+        self.token_norm = nn.LayerNorm(dim_out, eps=1e-6)
+        self.trunk = ModuleList([
             CamBlock(dim=dim_out, num_heads=num_heads, mlp_ratio=mlp_ratio,
                      init_values=init_values)
             for _ in range(trunk_depth)
-        ]
-        self.trunk_norm = nn.LayerNorm(dim_out)
+        ])
+        self.trunk_norm = nn.LayerNorm(dim_out, eps=1e-6)
 
     def __call__(
         self,

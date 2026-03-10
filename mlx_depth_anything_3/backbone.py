@@ -15,6 +15,7 @@ from mlx_depth_anything_3.layers import (
     Attention,
     Block,
     Mlp,
+    ModuleList,
     PatchEmbed,
     PositionGetter,
     RotaryPositionEmbedding2D,
@@ -93,7 +94,7 @@ class DinoVisionTransformer(nn.Module):
 
         # Build blocks
         ffn_cls = "swiglu" if ffn_layer in ("swiglufused", "swiglu") else "mlp"
-        self.blocks = [
+        self.blocks = ModuleList([
             Block(
                 dim=embed_dim,
                 num_heads=num_heads,
@@ -107,8 +108,8 @@ class DinoVisionTransformer(nn.Module):
                 rope=self.rope if (i >= rope_start and rope_start != -1) else None,
             )
             for i in range(depth)
-        ]
-        self.norm = nn.LayerNorm(embed_dim)
+        ])
+        self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
 
     def interpolate_pos_encoding(self, x: mx.array, w: int, h: int) -> mx.array:
         """Interpolate position embeddings for arbitrary resolution."""

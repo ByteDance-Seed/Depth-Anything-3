@@ -82,7 +82,16 @@ def run_pytorch(
     if weights_path is not None:
         from safetensors.torch import load_file
         state_dict = load_file(weights_path)
-        model.load_state_dict(state_dict, strict=False)
+        
+        # Strip 'model.' prefix if present
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith("model."):
+                new_state_dict[k[6:]] = v
+            else:
+                new_state_dict[k] = v
+        
+        model.load_state_dict(new_state_dict, strict=False)
         print(f"[PyTorch] Loaded weights from {weights_path}")
 
     # Convert NHWC -> NCHW for PyTorch
@@ -119,6 +128,7 @@ def run_mlx(
     Returns: (N, H, W) depth.
     """
     import mlx.core as mx
+    import mlx.nn as nn
 
     from mlx_depth_anything_3.model import DepthAnything3Net
 
@@ -128,9 +138,24 @@ def run_mlx(
         from convert_to_mlx import convert_weights, load_pytorch_weights
         pt_weights = load_pytorch_weights(weights_path)
         mlx_weights = convert_weights(pt_weights)
-        model.load_weights(list(mlx_weights.items()))
+        
+        def flatten_params(params, prefix=""):
+            flat = {}
+            for k, v in params.items():
+                name = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    flat.update(flatten_params(v, name))
+                else:
+                    flat[name] = v
+            return flat
+            
+        model_params = flatten_params(model.parameters())
+        filtered_weights = {k: v for k, v in mlx_weights.items() if k in model_params}
+        
+        # Load the filtered weights
+        model.load_weights(list(filtered_weights.items()), strict=False)
         mx.eval(model.parameters())
-        print(f"[MLX] Loaded and converted weights from {weights_path}")
+        print(f"[MLX] Loaded and converted {len(filtered_weights)} weights from {weights_path}")
 
     x = mx.array(images_np)
     ext_mx = mx.array(extrinsics_np) if extrinsics_np is not None else None
