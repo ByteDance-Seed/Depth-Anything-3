@@ -134,6 +134,7 @@ def auto(
     ),
     # Video-specific options
     fps: float = typer.Option(1.0, help="[Video] Sampling FPS for frame extraction"),
+    max_frames: int = typer.Option(None, help="[Video] Maximum number of frames to extract"),
     # COLMAP-specific options
     sparse_subdir: str = typer.Option(
         "", help="[COLMAP] Sparse reconstruction subdirectory (e.g., '0' for sparse/0/)"
@@ -255,7 +256,7 @@ def auto(
         export_dir = InputHandler.handle_export_dir(export_dir, auto_cleanup)
 
         # Process input
-        image_files = VideoHandler.process(input_path, export_dir, fps)
+        image_files = VideoHandler.process(input_path, export_dir, fps, max_frames)
 
         # Run inference
         run_inference(
@@ -380,7 +381,7 @@ def image(
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -459,7 +460,7 @@ def images(
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -546,7 +547,7 @@ def colmap(
         intrinsics=intrinsics,
         align_to_input_ext_scale=align_to_input_ext_scale,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -558,6 +559,7 @@ def colmap(
 def video(
     video_path: str = typer.Argument(..., help="Path to input video file"),
     fps: float = typer.Option(1.0, help="Sampling FPS for frame extraction"),
+    max_frames: int = typer.Option(None, help="Maximum number of frames to extract"),
     model_dir: str = typer.Option(DEFAULT_MODEL, help="Model directory path"),
     export_dir: str = typer.Option(DEFAULT_EXPORT_DIR, help="Export directory"),
     export_format: str = typer.Option("glb", help="Export format"),
@@ -603,7 +605,7 @@ def video(
     export_dir = InputHandler.handle_export_dir(export_dir, auto_cleanup)
 
     # Process input
-    image_files = VideoHandler.process(video_path, export_dir, fps)
+    image_files = VideoHandler.process(video_path, export_dir, fps, max_frames)
 
     # Parse export_feat parameter
     export_feat_layers = parse_export_feat(export_feat)
@@ -623,7 +625,7 @@ def video(
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,

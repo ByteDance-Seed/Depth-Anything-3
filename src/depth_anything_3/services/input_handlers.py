@@ -188,7 +188,7 @@ class VideoHandler(InputHandler):
     """Video handler"""
 
     @staticmethod
-    def process(video_path: str, output_dir: str, fps: float = 1.0) -> List[str]:
+    def process(video_path: str, output_dir: str, fps: float = 1.0, max_frames: int = None) -> List[str]:
         """Process video, extract frames"""
         InputHandler.validate_path(video_path, "Video file")
 
@@ -218,6 +218,9 @@ class VideoHandler(InputHandler):
                 err=True,
             )
 
+        if max_frames is not None:
+            typer.echo(f"⚠️  Limiting output to maximum {max_frames} frames")
+
         typer.echo(f"Extracting frames at {actual_fps:.2f} FPS (every {frame_interval} frame(s))")
 
         # Create output directory
@@ -233,9 +236,13 @@ class VideoHandler(InputHandler):
                 break
 
             if frame_count % frame_interval == 0:
-                frame_path = os.path.join(frames_dir, f"{saved_count:06d}.png")
-                cv2.imwrite(frame_path, frame)
-                saved_count += 1
+                if max_frames is None or saved_count < max_frames:
+                    frame_path = os.path.join(frames_dir, f"{saved_count:06d}.png")
+                    cv2.imwrite(frame_path, frame)
+                    saved_count += 1
+                else:
+                    # Reached max frames limit
+                    break
 
             frame_count += 1
 
