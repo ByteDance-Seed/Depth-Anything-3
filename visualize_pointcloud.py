@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import open3d as o3d
 import open3d.visualization.rendering as rendering
+import trimesh
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,24 @@ VIEWPOINTS = {
         "eye": [-0.8, -1.2, -0.8],
         "up": [0, -1, 0],
     },
+    "bird_right": {
+        "label": "Bird's Eye (Right)",
+        "lookat": [0, 0, 0],
+        "eye": [0.8, -1.2, 0.8],
+        "up": [0, -1, 0],
+    },
+    "bird_back": {
+        "label": "Bird's Eye (Back)",
+        "lookat": [0, 0, 0],
+        "eye": [0, -1.2, 0.8],
+        "up": [0, -1, 0],
+    },
+    "diagonal": {
+        "label": "Diagonal",
+        "lookat": [0, 0, 0],
+        "eye": [1.0, -0.8, -1.0],
+        "up": [0, -1, 0],
+    },
 }
 
 
@@ -260,46 +279,145 @@ def render_views(
 # Matplotlib grid
 # ---------------------------------------------------------------------------
 
+def export_frame_glb(
+    pts: np.ndarray,
+    cols: np.ndarray,
+    extrinsic: np.ndarray,
+    K: np.ndarray,
+    depth_shape: tuple[int, int],
+    output_path: str,
+    show_camera: bool = True,
+    camera_scale: float = 0.03,
+) -> None:
+    """Export a single frame's point cloud as a GLB file.
+
+    Points are centered and aligned to glTF convention (X-right, Y-up, Z-backward).
+    """
+    pts_f = pts.astype(np.float64)
+
+    # Center the point cloud
+    if pts_f.shape[0] > 0:
+        lo = np.percentile(pts_f, 5, axis=0)
+        hi = np.percentile(pts_f, 95, axis=0)
+        center = (lo + hi) / 2
+        scene_scale = float(np.linalg.norm(hi - lo)) or 1.0
+        pts_centered = pts_f - center
+    else:
+        center = np.zeros(3)
+        scene_scale = 1.0
+        pts_centered = pts_f
+
+    # glTF axis flip: DA3 uses OpenCV convention (Z-forward, Y-down)
+    # glTF expects Y-up, Z-backward -> flip Y and Z
+    flip = np.diag([1.0, -1.0, -1.0])
+    pts_gltf = (flip @ pts_centered.T).T
+
+    scene = trimesh.Scene()
+    if pts_gltf.shape[0] > 0:
+        colors_u8 = (cols * 255).astype(np.uint8) if cols.max() <= 1.0 else cols.astype(np.uint8)
+        pc = trimesh.points.PointCloud(vertices=pts_gltf, colors=colors_u8)
+        scene.add_geometry(pc)
+
+    # Add camera frustum wireframe
+    if show_camera:
+        H, W = depth_shape
+        ext44 = np.eye(4)
+        ext44[:extrinsic.shape[0], :extrinsic.shape[1]] = extrinsic
+        c2w = np.linalg.inv(ext44)
+        cam_pos_world = c2w[:3, 3] - center
+        cam_pos_gltf = flip @ cam_pos_world
+
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+        s = scene_scale * camera_scale
+
+        corners_cam = np.array([
+            [(0 - cx) / fx, (0 - cy) / fy, 1.0],
+            [(W - cx) / fx, (0 - cy) / fy, 1.0],
+            [(W - cx) / fx, (H - cy) / fy, 1.0],
+            [(0 - cx) / fx, (H - cy) / fy, 1.0],
+        ]) * s
+        pts_cam_h = np.hstack([np.vstack([np.zeros(3), corners_cam]), np.ones((5, 1))])
+        pts_w = (c2w @ pts_cam_h.T)[:3].T - center
+        pts_w_gltf = (flip @ pts_w.T).T
+
+        edges = [[0,1],[0,2],[0,3],[0,4],[1,2],[2,3],[3,4],[4,1]]
+        lines = trimesh.load_path(
+            np.array([[pts_w_gltf[s], pts_w_gltf[e]] for s, e in edges])
+        )
+        lines.colors = np.tile([255, 50, 50, 255], (len(lines.entities), 1))
+        scene.add_geometry(lines)
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    scene.export(output_path)
+
+
+def colorize_depth(depth: np.ndarray, cmap: str = "Spectral_r", percentile: float = 2.0) -> np.ndarray:
+    """Colorize a depth map using inverse-depth + colormap. Returns (H, W, 3) uint8."""
+    d = depth.copy()
+    valid = d > 0
+    d[valid] = 1.0 / d[valid]
+    if valid.sum() > 10:
+        lo = np.percentile(d[valid], percentile)
+        hi = np.percentile(d[valid], 100 - percentile)
+    else:
+        lo, hi = 0.0, 1.0
+    d = np.clip((d - lo) / (hi - lo + 1e-8), 0, 1)
+    cm = plt.get_cmap(cmap)
+    colored = (cm(d)[:, :, :3] * 255).astype(np.uint8)
+    return colored
+
+
 def make_frame_grid(
     views: list[dict],
     frame_idx: int,
     source_image: np.ndarray | None,
     output_path: str,
+    depth_image: np.ndarray | None = None,
     dpi: int = 150,
 ):
-    """Create a multi-viewpoint grid for one frame.
+    """Create a 3x4 grid for one frame.
 
-    Layout: source image (if available) + rendered viewpoints.
+    Row 1: Input Image | Depth Map | viewpoint 1 | viewpoint 2
+    Row 2: viewpoint 3 | viewpoint 4 | viewpoint 5 | viewpoint 6
+    Row 3: viewpoint 7 | viewpoint 8 | viewpoint 9 | viewpoint 10
     """
-    has_src = source_image is not None
-    n_panels = len(views) + (1 if has_src else 0)
-    cols = min(n_panels, 3)
-    rows = (n_panels + cols - 1) // cols
+    cols = 4
+    rows = 3
 
     fig, axes = plt.subplots(rows, cols, figsize=(5.0 * cols, 4.5 * rows), squeeze=False)
     fig.suptitle(f"Frame {frame_idx:04d}", fontsize=14, fontweight="bold")
 
-    panel_idx = 0
-
-    if has_src:
-        r, c = divmod(panel_idx, cols)
-        ax = axes[r, c]
+    # Row 1, col 0: Input image
+    ax = axes[0, 0]
+    if source_image is not None:
         ax.imshow(source_image)
         ax.set_title("Input Image", fontsize=11)
-        ax.set_xticks([]); ax.set_yticks([])
-        panel_idx += 1
+    else:
+        ax.axis("off")
+    ax.set_xticks([]); ax.set_yticks([])
 
-    for view in views:
-        r, c = divmod(panel_idx, cols)
+    # Row 1, col 1: Depth map
+    ax = axes[0, 1]
+    if depth_image is not None:
+        ax.imshow(depth_image)
+        ax.set_title("Depth Map", fontsize=11)
+    else:
+        ax.axis("off")
+    ax.set_xticks([]); ax.set_yticks([])
+
+    # Remaining panels: viewpoints (row 1 cols 2-3, then rows 2-3 fully)
+    vp_positions = [(0, 2), (0, 3),
+                    (1, 0), (1, 1), (1, 2), (1, 3),
+                    (2, 0), (2, 1), (2, 2), (2, 3)]
+    for vi, (r, c) in enumerate(vp_positions):
         ax = axes[r, c]
-        ax.imshow(view["image"])
-        ax.set_title(view["viewpoint_label"], fontsize=11)
-        ax.set_xticks([]); ax.set_yticks([])
-        panel_idx += 1
-
-    for idx in range(panel_idx, rows * cols):
-        r, c = divmod(idx, cols)
-        axes[r, c].axis("off")
+        if vi < len(views):
+            ax.imshow(views[vi]["image"])
+            ax.set_title(views[vi]["viewpoint_label"], fontsize=11)
+            ax.set_xticks([]); ax.set_yticks([])
+        else:
+            ax.axis("off")
 
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -325,7 +443,7 @@ def main():
     parser.add_argument("--output", type=str, default="workspace/pc_vis",
                         help="Output directory")
     parser.add_argument("--viewpoints", nargs="*",
-                        default=["front", "bird", "top", "right", "bird_left"],
+                        default=["front", "back", "top", "right", "left", "bird", "bird_left", "bird_right", "bird_back", "diagonal"],
                         help=f"Viewpoint names: {list(VIEWPOINTS.keys())}")
     parser.add_argument("--max-frames", type=int, default=None,
                         help="Max frames to render")
@@ -348,6 +466,8 @@ def main():
                         help="Hide camera frustum")
     parser.add_argument("--no-source-image", action="store_true",
                         help="Don't include source image in grid")
+    parser.add_argument("--no-glb", action="store_true",
+                        help="Skip per-frame GLB export")
     parser.add_argument("--dpi", type=int, default=150,
                         help="Output DPI (default: 150)")
     args = parser.parse_args()
@@ -386,19 +506,23 @@ def main():
 
     # ---- Load images ----
     source_images: dict[int, np.ndarray] = {}
-    if args.images:
+    image_paths = None
+
+    # Prefer image_paths from config.json (records exact paths used during inference)
+    if args.config and Path(args.config).exists():
+        with open(args.config) as f:
+            cfg = json.load(f)
+            if "image_paths" in cfg:
+                image_paths = cfg["image_paths"]
+                print(f"Loaded {len(image_paths)} image paths from {args.config}")
+
+    # Fallback: scan --images directory
+    if image_paths is None and args.images:
         img_dir = Path(args.images)
-        image_paths = None
-        if args.config and Path(args.config).exists():
-            with open(args.config) as f:
-                cfg = json.load(f)
-                if "image_paths" in cfg:
-                    image_paths = cfg["image_paths"]
+        all_imgs = sorted(list(img_dir.glob("*.png")) + list(img_dir.glob("*.jpg")))
+        image_paths = [str(p) for p in all_imgs]
 
-        if image_paths is None:
-            all_imgs = sorted(list(img_dir.glob("*.png")) + list(img_dir.glob("*.jpg")))
-            image_paths = [str(p) for p in all_imgs]
-
+    if image_paths is not None:
         for i in indices:
             if i < len(image_paths):
                 img = cv2.imread(str(image_paths[i]))
@@ -456,13 +580,26 @@ def main():
         views = [{"image": img, "viewpoint_label": vp["label"]}
                  for img, vp in zip(rendered, viewpoints)]
 
+        # Colorize depth map for the grid
+        depth_vis = colorize_depth(depth)
+
         grid_path = output_dir / f"frame_{fi:04d}_views.png"
         make_frame_grid(
             views, fi,
             source_image=src_img if not args.no_source_image else None,
             output_path=str(grid_path),
+            depth_image=depth_vis,
             dpi=args.dpi,
         )
+
+        if not args.no_glb:
+            glb_path = output_dir / f"frame_{fi:04d}.glb"
+            export_frame_glb(
+                pts, cols, ext, K, (H, W),
+                output_path=str(glb_path),
+                show_camera=not args.no_frustum,
+                camera_scale=0.03,
+            )
 
         print(f"  Frame {fi:4d}: {pts.shape[0]:,} pts -> {grid_path.name}")
 
