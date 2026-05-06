@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 # ---- data ----
-DATA_ROOT=/home/derek_austin/Depth-Anything-3/drone_v59_depth
+DATA_ROOT=/home/derek_austin/Depth-Anything-3/datasets/drone_v60_depth
 TRAIN_SPLIT=train
 VAL_SPLIT=valid                   # set to None if you don't have a val/ folder yet
 SUBSET_SIZE=None                # None = use full training set
@@ -22,8 +22,8 @@ LOSS=log_l1                     # log_l1 | silog
 SILOG_LAMBDA=0.15
 
 # ---- optim ----
-BATCH_SIZE=4
-NUM_WORKERS=4
+BATCH_SIZE=12
+NUM_WORKERS=12
 EPOCHS=20
 LR=1e-4
 WEIGHT_DECAY=0.0
@@ -34,7 +34,7 @@ AMP_DTYPE=bfloat16              # bfloat16 | float16 | float32
 LOG_EVERY=20
 VAL_EVERY_STEPS=8000
 VAL_MAX_BATCHES=20
-CKPT_DIR=./checkpoints/drone_v59
+CKPT_DIR=./checkpoints/drone_v60
 RUN_NAME="run_$(date +%Y%m%d_%H%M%S)_depth"
 SEED=0
 

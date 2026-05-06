@@ -27,6 +27,8 @@ class FinetuneConfig:
     # loss
     loss: str = "log_l1"
     silog_lambda: float = 0.15
+    bbox_loss: bool = False
+    bbox_pad: float = 0.0
 
     # optim
     batch_size: int = 4
@@ -79,6 +81,8 @@ _TYPE_MAP = {
     "freeze_sky_head": "bool",
     "loss": str,
     "silog_lambda": float,
+    "bbox_loss": "bool",
+    "bbox_pad": float,
     "batch_size": int,
     "num_workers": int,
     "epochs": int,

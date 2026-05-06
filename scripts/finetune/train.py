@@ -51,11 +51,11 @@ def _squeeze_depth(depth_out: torch.Tensor) -> torch.Tensor:
     return depth_out
 
 
-def compute_loss(cfg: FinetuneConfig, pred_raw, gt_canonical, valid):
+def compute_loss(cfg: FinetuneConfig, pred_raw, gt_canonical, valid, bbox_mask=None):
     if cfg.loss == "log_l1":
-        return log_l1(pred_raw, gt_canonical, valid)
+        return log_l1(pred_raw, gt_canonical, valid, bbox_mask=bbox_mask)
     if cfg.loss == "silog":
-        return silog(pred_raw, gt_canonical, valid, lam=cfg.silog_lambda)
+        return silog(pred_raw, gt_canonical, valid, bbox_mask=bbox_mask, lam=cfg.silog_lambda)
     raise ValueError(f"unknown loss: {cfg.loss}")
 
 
@@ -83,13 +83,16 @@ def run_validation(
         rgb = batch["rgb"].to(device, non_blocking=True)
         gt_m = batch["depth_m"].to(device, non_blocking=True)
         valid = batch["valid"].to(device, non_blocking=True)
+        bbox_mask = None
+        if cfg.bbox_loss:
+            bbox_mask = batch["bbox_mask"].to(device, non_blocking=True)
         gt_canonical = gt_m * canonical_over_processed
 
         x = rgb.unsqueeze(1)
         with torch.autocast(device_type="cuda", dtype=amp):
             out = net(x)
             pred_raw = _squeeze_depth(out["depth"]).float()
-        loss = compute_loss(cfg, pred_raw, gt_canonical, valid)
+        loss = compute_loss(cfg, pred_raw, gt_canonical, valid, bbox_mask=bbox_mask)
         pred_m = pred_raw * focal_processed / cfg.canonical_focal
         m = depth_metrics(pred_m, gt_m, valid)
         ratios_absrel.append(m["absrel"])
@@ -196,6 +199,9 @@ def main() -> None:
             rgb = batch["rgb"].to(device, non_blocking=True)
             gt_m = batch["depth_m"].to(device, non_blocking=True)
             valid = batch["valid"].to(device, non_blocking=True)
+            bbox_mask = None
+            if cfg.bbox_loss:
+                bbox_mask = batch["bbox_mask"].to(device, non_blocking=True)
             gt_canonical = gt_m * canonical_over_processed
 
             x = rgb.unsqueeze(1)  # (B, 1, 3, H, W) for DA3's view dim
@@ -206,7 +212,7 @@ def main() -> None:
                     print(f"[shape] out['depth']={tuple(depth_out.shape)} rgb={tuple(rgb.shape)}")
                 pred_raw = _squeeze_depth(depth_out).float()
 
-            loss = compute_loss(cfg, pred_raw, gt_canonical, valid)
+            loss = compute_loss(cfg, pred_raw, gt_canonical, valid, bbox_mask=bbox_mask)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(

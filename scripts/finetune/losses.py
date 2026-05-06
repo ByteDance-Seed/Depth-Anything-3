@@ -14,9 +14,12 @@ def log_l1(
     pred_raw: torch.Tensor,
     gt_canonical: torch.Tensor,
     valid: torch.Tensor,
+    bbox_mask: torch.Tensor | None = None,
     eps: float = EPS,
 ) -> torch.Tensor:
     mask = valid & (pred_raw > eps) & (gt_canonical > eps)
+    if bbox_mask is not None:
+        mask = mask & bbox_mask
     if mask.sum() == 0:
         return _zero_loss(pred_raw)
     p = torch.log(pred_raw[mask].clamp_min(eps))
@@ -28,11 +31,14 @@ def silog(
     pred_raw: torch.Tensor,
     gt_canonical: torch.Tensor,
     valid: torch.Tensor,
+    bbox_mask: torch.Tensor | None = None,
     lam: float = 0.15,
     eps: float = EPS,
 ) -> torch.Tensor:
     """Scale-invariant log loss (Eigen et al.)."""
     mask = valid & (pred_raw > eps) & (gt_canonical > eps)
+    if bbox_mask is not None:
+        mask = mask & bbox_mask
     if mask.sum() == 0:
         return _zero_loss(pred_raw)
     d = torch.log(pred_raw[mask].clamp_min(eps)) - torch.log(gt_canonical[mask].clamp_min(eps))

@@ -19,19 +19,39 @@ def _split_root(cfg: FinetuneConfig, split: str) -> Path:
     return cfg.data_root / split
 
 
+def _parse_yolo_boxes(path: Path) -> list[tuple[float, float, float, float]]:
+    """Parse YOLO-format label file -> list of (cx, cy, w, h) in [0,1]. Missing
+    file or empty content -> []."""
+    if not path.is_file():
+        return []
+    boxes: list[tuple[float, float, float, float]] = []
+    for ln in path.read_text().splitlines():
+        parts = ln.strip().split()
+        if len(parts) < 5:
+            continue
+        _cls, cx, cy, w, h = parts[:5]
+        boxes.append((float(cx), float(cy), float(w), float(h)))
+    return boxes
+
+
 def _build_valid_index(cfg: FinetuneConfig, split: str) -> list[str]:
     """Return a list of stems where images/<stem>.jpeg and depths/<stem>.npy exist
-    and the depth map is not all zeros."""
+    and the depth map is not all zeros. If cfg.bbox_loss is on, also require a
+    non-empty labels/<stem>.txt."""
     split_dir = _split_root(cfg, split)
     depths_dir = split_dir / "depths"
     images_dir = split_dir / "images"
+    labels_dir = split_dir / "labels"
     assert depths_dir.is_dir(), f"missing depths dir: {depths_dir}"
     assert images_dir.is_dir(), f"missing images dir: {images_dir}"
+    if cfg.bbox_loss:
+        assert labels_dir.is_dir(), f"missing labels dir (required for bbox_loss): {labels_dir}"
 
     stems: list[str] = []
     total = 0
     rejected_empty = 0
     rejected_missing_img = 0
+    rejected_no_bbox = 0
     for p in sorted(depths_dir.glob("*.npy")):
         total += 1
         stem = p.stem
@@ -43,17 +63,23 @@ def _build_valid_index(cfg: FinetuneConfig, split: str) -> list[str]:
         if np.asarray(arr).max() <= 0:
             rejected_empty += 1
             continue
+        if cfg.bbox_loss:
+            if not _parse_yolo_boxes(labels_dir / f"{stem}.txt"):
+                rejected_no_bbox += 1
+                continue
         stems.append(stem)
 
     print(
         f"[dataset/{split}] index: kept {len(stems)}/{total} "
-        f"(empty={rejected_empty}, missing_img={rejected_missing_img})"
+        f"(empty={rejected_empty}, missing_img={rejected_missing_img}, "
+        f"no_bbox={rejected_no_bbox})"
     )
     return stems
 
 
 def _index_cache_path(cfg: FinetuneConfig, split: str) -> Path:
-    return cfg.valid_index_cache / f"valid_{split}_index.txt"
+    suffix = "_bbox" if cfg.bbox_loss else ""
+    return cfg.valid_index_cache / f"valid_{split}{suffix}_index.txt"
 
 
 def get_or_build_index(cfg: FinetuneConfig, split: str) -> list[str]:
@@ -76,6 +102,8 @@ class DroneDepthDataset(Dataset):
       rgb:      FloatTensor (3, proc_res, proc_res), ImageNet-normalized
       depth_m:  FloatTensor (proc_res, proc_res), meters at proc_res
       valid:    BoolTensor  (proc_res, proc_res), True on usable pixels
+      bbox_mask: BoolTensor (proc_res, proc_res), present iff cfg.bbox_loss;
+                 True inside the union of YOLO bboxes at proc_res
       focal_px_input: float scalar (focal at orig_res)
       stem:     str
     """
@@ -92,6 +120,7 @@ class DroneDepthDataset(Dataset):
         self.split_dir = _split_root(cfg, split)
         self.images_dir = self.split_dir / "images"
         self.depths_dir = self.split_dir / "depths"
+        self.labels_dir = self.split_dir / "labels"
 
         all_stems = get_or_build_index(cfg, split)
         if subset is not None and subset < len(all_stems):
@@ -137,14 +166,37 @@ class DroneDepthDataset(Dataset):
         valid_t = torch.from_numpy(mask_resized)
         return depth_t, valid_t
 
+    def _load_bbox_mask(self, stem: str) -> torch.Tensor:
+        """Build a (proc_res, proc_res) bool mask from the union of YOLO bboxes,
+        optionally padded by cfg.bbox_pad (fraction of box size)."""
+        tgt = self.cfg.proc_res
+        mask = np.zeros((tgt, tgt), dtype=bool)
+        boxes = _parse_yolo_boxes(self.labels_dir / f"{stem}.txt")
+        pad = float(self.cfg.bbox_pad)
+        for cx, cy, w, h in boxes:
+            w_p = w * (1.0 + 2.0 * pad)
+            h_p = h * (1.0 + 2.0 * pad)
+            x0 = int(np.floor(max(0.0, (cx - w_p / 2.0) * tgt)))
+            y0 = int(np.floor(max(0.0, (cy - h_p / 2.0) * tgt)))
+            x1 = int(np.ceil(min(1.0, (cx + w_p / 2.0) * tgt) * 1.0))
+            y1 = int(np.ceil(min(1.0, (cy + h_p / 2.0) * tgt) * 1.0))
+            x1 = min(x1, tgt)
+            y1 = min(y1, tgt)
+            if x1 > x0 and y1 > y0:
+                mask[y0:y1, x0:x1] = True
+        return torch.from_numpy(mask)
+
     def __getitem__(self, idx: int) -> dict:
         stem = self.stems[idx]
         rgb = self._load_rgb(stem)
         depth_m, valid = self._load_depth_and_valid(stem)
-        return {
+        item = {
             "rgb": rgb,
             "depth_m": depth_m,
             "valid": valid,
             "focal_px_input": float(self.cfg.dataset_focal_at_orig),
             "stem": stem,
         }
+        if self.cfg.bbox_loss:
+            item["bbox_mask"] = self._load_bbox_mask(stem)
+        return item

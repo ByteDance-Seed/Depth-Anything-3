@@ -43,3 +43,5 @@ finetune_cache/
 
 # Training data
 drone_v59_depth/
+datasets/
+.venv/
