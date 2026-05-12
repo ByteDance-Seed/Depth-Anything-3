@@ -229,24 +229,78 @@ class InputProcessor:
         pil_img = self._load_image(img)
         orig_w, orig_h = pil_img.size
 
-        # Boundary resize
-        pil_img = self._resize_image(pil_img, process_res, process_res_method)
-        w, h = pil_img.size
-        intrinsic = self._resize_ixt(intrinsic, orig_w, orig_h, w, h)
-
-        # Enforce divisibility by PATCH_SIZE
-        if process_res_method.endswith("resize"):
-            pil_img = self._make_divisible_by_resize(pil_img, self.PATCH_SIZE)
-            new_w, new_h = pil_img.size
-            intrinsic = self._resize_ixt(intrinsic, w, h, new_w, new_h)
-            w, h = new_w, new_h
-        elif process_res_method.endswith("crop"):
-            pil_img = self._make_divisible_by_crop(pil_img, self.PATCH_SIZE)
-            new_w, new_h = pil_img.size
-            intrinsic = self._crop_ixt(intrinsic, w, h, new_w, new_h)
-            w, h = new_w, new_h
+        if process_res_method == "upper_bound_resize_padded":
+            # `upper_bound_resize` followed by constant padding to a square
+            # canvas. The aspect-preserving resize math is identical to the
+            # legacy `upper_bound_resize` mode just below (longest side ≤
+            # process_res, snap dims to multiples of PATCH_SIZE); the only
+            # addition is the ImageNet-mean grey padding that makes the
+            # final tensor (process_res, process_res) so a fixed-square
+            # ONNX graph can consume it.
+            #
+            # In fact we cannot currently export onnx with a dynamic size, hence
+            # we have to commit to a fixed square size, and pad the shortest side
+            # with gray (letterboxing).
+            #
+            # The model sees the same pixels `upper_bound_resize` would feed it,
+            # plus neutral padding bars.
+            #
+            # See `depth_anything_3.onnx.input_processor.NumpyInputProcessor`
+            # for the companion numpy implementation and the matching
+            # inverse in `depth_anything_3.onnx.postprocess.unletterbox_depth`.
+            assert process_res % self.PATCH_SIZE == 0, (
+                f"upper_bound_resize_padded requires process_res "
+                f"({process_res}) to be a multiple of PATCH_SIZE "
+                f"({self.PATCH_SIZE})"
+            )
+            (
+                pil_img,
+                scale_x,
+                scale_y,
+                pad_left,
+                pad_top,
+                scaled_w,
+                scaled_h,
+            ) = self._upper_bound_resize_padded(pil_img, process_res, orig_w, orig_h)
+            w, h = process_res, process_res
+            if intrinsic is not None:
+                K = intrinsic.copy()
+                K[0, 0] *= scale_x
+                K[0, 2] = K[0, 2] * scale_x + pad_left
+                K[1, 1] *= scale_y
+                K[1, 2] = K[1, 2] * scale_y + pad_top
+                intrinsic = K
+        elif process_res_method == "square_resize":
+            # Direct aspect-distorting resize to (process_res, process_res).
+            # Same fixed-shape consumer as `upper_bound_resize_padded`, but
+            # the image is squashed to fit. Mirrors the approach in
+            # MoonCodeMaster/Depth-Anything-3-Onnx.
+            assert process_res % self.PATCH_SIZE == 0, (
+                f"square_resize requires process_res ({process_res}) to be a "
+                f"multiple of PATCH_SIZE ({self.PATCH_SIZE})"
+            )
+            pil_img = self._square_resize(pil_img, process_res)
+            w, h = process_res, process_res
+            intrinsic = self._resize_ixt(intrinsic, orig_w, orig_h, w, h)
         else:
-            raise ValueError(f"Unsupported process_res_method: {process_res_method}")
+            # Boundary resize
+            pil_img = self._resize_image(pil_img, process_res, process_res_method)
+            w, h = pil_img.size
+            intrinsic = self._resize_ixt(intrinsic, orig_w, orig_h, w, h)
+
+            # Enforce divisibility by PATCH_SIZE
+            if process_res_method.endswith("resize"):
+                pil_img = self._make_divisible_by_resize(pil_img, self.PATCH_SIZE)
+                new_w, new_h = pil_img.size
+                intrinsic = self._resize_ixt(intrinsic, w, h, new_w, new_h)
+                w, h = new_w, new_h
+            elif process_res_method.endswith("crop"):
+                pil_img = self._make_divisible_by_crop(pil_img, self.PATCH_SIZE)
+                new_w, new_h = pil_img.size
+                intrinsic = self._crop_ixt(intrinsic, w, h, new_w, new_h)
+                w, h = new_w, new_h
+            else:
+                raise ValueError(f"Unsupported process_res_method: {process_res_method}")
 
         # Convert to tensor & normalize
         img_tensor = self._normalize_image(pil_img)
@@ -255,6 +309,53 @@ class InputProcessor:
 
         # Return: (img_tensor, (H, W), intrinsic, extrinsic)
         return img_tensor, (H, W), intrinsic, extrinsic
+
+    def _square_resize(self, img: Image.Image, target: int) -> Image.Image:
+        w, h = img.size
+        if (w, h) == (target, target):
+            return img
+        upscale = (target > w) or (target > h)
+        interpolation = cv2.INTER_CUBIC if upscale else cv2.INTER_AREA
+        arr = cv2.resize(np.asarray(img), (target, target), interpolation=interpolation)
+        return Image.fromarray(arr)
+
+    def _upper_bound_resize_padded(
+        self, img: Image.Image, target: int, orig_w: int, orig_h: int
+    ):
+        """Mirror of `NumpyInputProcessor._upper_bound_resize_padded`. The
+        aspect-preserving resize is the same operation as
+        `_resize_longest_side` + `_make_divisible_by_resize` (i.e. the
+        `upper_bound_resize` path above); the padding step is what makes
+        this mode ONNX-fixed-shape friendly.
+
+        Returns a 7-tuple:
+        ``(padded_PIL, scale_x, scale_y, pad_left, pad_top, scaled_w, scaled_h)``.
+        """
+        scale = target / float(max(orig_w, orig_h))
+        scaled_w = max(self.PATCH_SIZE, int(round(orig_w * scale)))
+        scaled_h = max(self.PATCH_SIZE, int(round(orig_h * scale)))
+        scaled_w = min(target, (scaled_w // self.PATCH_SIZE) * self.PATCH_SIZE)
+        scaled_h = min(target, (scaled_h // self.PATCH_SIZE) * self.PATCH_SIZE)
+        if scaled_w == 0:
+            scaled_w = self.PATCH_SIZE
+        if scaled_h == 0:
+            scaled_h = self.PATCH_SIZE
+
+        interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+        resized = cv2.resize(np.asarray(img), (scaled_w, scaled_h), interpolation=interpolation)
+
+        pad_left = (target - scaled_w) // 2
+        pad_top = (target - scaled_h) // 2
+
+        # ImageNet mean color in uint8: (123, 117, 104).
+        pad_color = (np.array([0.485, 0.456, 0.406]) * 255.0).round().astype(np.uint8)
+        canvas = np.empty((target, target, 3), dtype=np.uint8)
+        canvas[:] = pad_color
+        canvas[pad_top : pad_top + scaled_h, pad_left : pad_left + scaled_w] = resized
+
+        scale_x = scaled_w / float(orig_w)
+        scale_y = scaled_h / float(orig_h)
+        return Image.fromarray(canvas), scale_x, scale_y, pad_left, pad_top, scaled_w, scaled_h
 
     # -----------------------------
     # Intrinsics transforms
