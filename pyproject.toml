@@ -12,39 +12,91 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Your Name" }]
 
 dependencies = [
-    "pre-commit",
-    "trimesh",
-    "torch>=2",
-    "torchvision",
-    "einops",
-    "huggingface_hub",
-    "imageio",
+    # ----------------------------------------------------------------
+    # MINIMUM deps to import `depth_anything_3.onnx`, run the model,
+    # and save the model's raw numpy output as an .npz (`mini_npz`).
+    # Anything else (matplotlib visualisations, GLB export, COLMAP,
+    # the torch path, the backend service, ...) lives in an extra below.
+    # ----------------------------------------------------------------
+    "addict",                   # output_processor (Dict)
+    "huggingface_hub",          # load .onnx from HF Hub spec "user/repo:file.onnx"
+    "imageio",                  # parallel_utils' image saver + npz/depth_vis writes
     "numpy<2",
-    "opencv-python",
-    "xformers",
-    "open3d",
-    "fastapi",
-    "uvicorn",
-    "requests",
-    "typer",
-    "pillow",
-    "omegaconf",
-    "evo",
-    "e3nn",
-    "moviepy",
-    "plyfile",
-    "pillow_heif",
-    "safetensors",
-    "uvicorn",
-    "moviepy==1.0.3",
-    "typer>=0.9.0",
-    "pycolmap",
+    # Headless OpenCV (no GTK/Qt/X11 bindings). The codebase never calls
+    # cv2.imshow / waitKey / namedWindow, so the headless build covers
+    # every cv2 call site (preprocess, postprocess, video frame I/O,
+    # benchmarks). Users who want the GUI build can `pip install
+    # opencv-python` themselves -- it replaces the headless install.
+    "opencv-python-headless",   # ~90 MB lighter than opencv-python
+    "pillow",                   # image loading
+    "tqdm",                     # parallel_utils progress bar
+    "typer>=0.9.0",             # `da3` CLI
 ]
 
 [project.optional-dependencies]
-app = ["gradio>=5", "pillow>=9.0"] # requires that python3>=3.10
-gs = ["gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70"]
-all = ["depth-anything-3[app,gs]"]
+# Pick exactly one of {onnx, onnx-gpu} to enable inference.
+# Note: the `onnx` Python package is NOT here -- it's only used by the
+# export tool (`da3 onnx-export`) and the optional `onnx.checker` call
+# in `_try_check`. It lives under [torch] since exporting requires
+# torch anyway. Inference only needs onnxruntime.
+onnx = ["onnxruntime>=1.17"]
+onnx-gpu = ["onnxruntime-gpu>=1.17"]
+
+# Color-mapped depth visualisations + parity compare plots.
+# Required by --export-format depth_vis and by `da3 onnx-parity --out-dir`.
+viz = ["matplotlib"]
+
+# GLB export (`--export-format glb`).
+glb = ["trimesh"]
+
+# The torch-backed inference path + ONNX export tool. Includes the model
+# config loader (omegaconf), .safetensors loader, pose-alignment lib
+# (evo), and the torch DL stack the model itself runs on.
+torch = [
+    "torch>=2",
+    "torchvision",
+    "einops",
+    "e3nn",
+    "xformers",
+    "safetensors",
+    "omegaconf",
+    "evo",
+    # Used by `da3 onnx-export`'s onnx.checker.check_model call, and by
+    # torch.onnx.export's dynamo path. Pulled in here because the export
+    # tool always requires torch anyway.
+    "onnx>=1.15",
+    "onnxscript",
+]
+
+# Backend HTTP service (`da3 backend`) -- FastAPI + uvicorn server, plus
+# `requests` for the local `da3 *` clients to talk to a remote backend.
+backend = [
+    "fastapi",
+    "uvicorn",
+    "requests",
+]
+
+# COLMAP export (`--export-format colmap`).
+colmap = ["pycolmap"]
+
+# Gradio web app
+app = ["gradio>=5", "pillow>=9.0", "pillow_heif"] # requires python3>=3.10
+
+# 3D Gaussian Splatting (training/inference). gsplat is CUDA-only.
+gs = [
+    "gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70",
+    "moviepy==1.0.3",
+    "plyfile",
+]
+
+# Benchmark / evaluation extras (Open3D for evaluators, plyfile for DTU)
+bench = ["open3d", "plyfile"]
+
+# Pre-commit hooks, linters, etc. Not installed in production.
+dev = ["pre-commit"]
+
+# Convenience meta-extra: everything but CPU-only ORT.
+all = ["depth-anything-3[torch,app,gs,bench,backend,colmap,viz,glb,onnx-gpu]"]
 
 
 [project.scripts]

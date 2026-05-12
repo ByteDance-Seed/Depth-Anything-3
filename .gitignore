@@ -33,3 +33,8 @@ input_images*/
 src/debug_main.py
 temp*.png
 /outputs
+
+# ONNX exports + local venv
+/exports/
+/.venv/
+*.onnx
