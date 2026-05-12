@@ -184,6 +184,92 @@ expected and harmless at the trace shape.
 
 ---
 
+## 3b. Camera intrinsics: when do I need `--with-camera`?
+
+The `--with-camera` flag adds `extrinsics` and `intrinsics` as graph
+inputs alongside `image`. Whether you should pass it depends on
+**which model variant you're exporting**, not on whether you happen
+to have a calibrated camera.
+
+### The two architecture families
+
+Look at the model's YAML config in `src/depth_anything_3/configs/`:
+
+```yaml
+# da3-large.yaml — non-metric, CAMERA-CONDITIONED
+net:     DinoV2 vitl …
+head:    DualDPT …
+cam_enc: CameraEnc …      ← takes (extrinsics, intrinsics, image_shape)
+                            and produces a camera token fused into
+                            the backbone
+cam_dec: CameraDec …      ← predicts extrinsics & intrinsics back
+```
+
+```yaml
+# da3metric-large.yaml — METRIC, NO camera head
+net:  DinoV2 vitl …
+head: DPT output_dim=1 …
+# no cam_enc, no cam_dec
+```
+
+The presence of a `cam_enc` block is the signal: a model **with**
+`cam_enc` *can* condition its prediction on input intrinsics; a model
+**without** it just consumes the image and ignores anything else.
+
+### Decision matrix
+
+| Model | Architecture | `--with-camera`? | What intrinsics do at inference |
+| --- | --- | --- | --- |
+| `DA3-SMALL/BASE/LARGE/GIANT` (non-metric) | has `cam_enc` + `cam_dec` | **Yes**, if you want to *use* them | conditioning input + predicted output |
+| `DA3METRIC-*` | no `cam_*` | **No** — it would just bake unused inputs | silently ignored by the graph |
+| `DA3NESTED-*` | metric model uses focal length internally via `intrinsics` predicted by the main net | **No** for either sub-export | metric scaling uses the main net's predicted intrinsics, not user-supplied ones |
+
+### How to confirm at runtime
+
+After exporting, inspect the ONNX file's inputs:
+
+```python
+import onnxruntime as ort
+sess = ort.InferenceSession("exports/da3metric-large_504.onnx", providers=["CPUExecutionProvider"])
+for inp in sess.get_inputs():
+    print(inp.name, inp.shape)
+# image [1, 'N', 3, 504, 504]
+# ← no 'intrinsics' input, so the export is camera-unconditioned
+```
+
+If `intrinsics` (and/or `extrinsics`) is missing from the inputs list,
+the graph won't use whatever K you pass. The
+`OrtSession.run` wrapper in `depth_anything_3.onnx.session` already
+guards against this — it only feeds inputs that the graph declares —
+so nothing breaks; the K is just silently dropped.
+
+### What if I have intrinsics but the export is camera-unconditioned?
+
+You can still use them **after** inference, in plain Python:
+
+- Back-project metric depth to a 3D point cloud:
+  `X = (u - cx) * Z / fx`, `Y = (v - cy) * Z / fy`, `Z = depth[v, u]`.
+- Feed the point cloud into your SLAM / fusion / GLB pipeline.
+
+The Gradio app's Inference tab accepts intrinsics in its UI and stores
+them on `Prediction.intrinsics` *if* the model emits them; for
+camera-unconditioned models the field stays `None` and the user-entered
+K is only kept for your reference. That's by design — the *value* of
+the calibrated K is in what you do with the depth, not in passing it
+into a graph that doesn't read it.
+
+### TL;DR
+
+- Exporting `DA3METRIC-LARGE`: skip `--with-camera`. The flag is a no-op
+  for this architecture; the existing export is correct as-is.
+- Exporting `DA3-LARGE` and wanting calibrated inference: yes, pass
+  `--with-camera` and feed `intrinsics` through the Gradio app or the
+  Python API.
+- The `[onnx]` install size is the same either way; the difference is
+  purely in the ONNX graph's input signature.
+
+---
+
 ## 4. Run ONNX inference
 
 The runtime path uses `process_res_method="upper_bound_resize_padded"`
@@ -484,6 +570,40 @@ print(report.summary())
 for diff in report.diffs:
     print(diff.name, diff.mean_abs, diff.max_rel)
 ```
+
+---
+
+## 5b. Standalone Gradio playground
+
+For interactive testing without typing CLI flags, run the standalone
+playground at `scripts/onnx_gradio.py`. Two tabs:
+
+- **Inference** — upload an image, pick an ONNX file, optionally
+  supply camera intrinsics (fx, fy, cx, cy), hit Run. Output is a
+  colour-mapped depth image plus a downloadable `.npz`.
+- **Parity (torch vs ONNX)** — same UI plus a HF model id for the torch
+  side. Lazy-imports torch so the app launches without `[torch]`
+  installed; only the Run button on that tab actually needs it.
+
+Install + run:
+
+```bash
+pip install -e ".[onnx,viz,glb]"   # for the inference tab + GLB
+pip install -e ".[torch]"          # additionally needed for the parity tab
+pip install gradio                  # the app itself
+python scripts/onnx_gradio.py --onnx exports/da3metric-large_504.onnx
+# opens http://127.0.0.1:7860
+```
+
+Useful flags: `--port 7861`, `--host 0.0.0.0` (LAN access), `--share`
+(public Gradio tunnel).
+
+The intrinsics input is plumbed through to
+`DepthAnything3Onnx.inference(intrinsics=...)`. For models without a
+camera head (e.g. `DA3METRIC-LARGE`) those intrinsics are accepted but
+only land in `Prediction.intrinsics` for downstream consumption — the
+ONNX graph itself doesn't use them. For camera-conditioned exports
+(re-export with `--with-camera`) they're fed as a graph input.
 
 ---
 
