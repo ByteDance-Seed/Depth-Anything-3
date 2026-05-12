@@ -22,8 +22,10 @@ from __future__ import annotations
 import os
 import typer
 
-from depth_anything_3.services import start_server
-from depth_anything_3.services.gallery import gallery as gallery_main
+# NOTE: services/inference_service depends on torch only inside its `load_model`
+# helper, so we can import `run_inference` here. `start_server` and `gallery`
+# are imported lazily inside their CLI command bodies because they pull in the
+# torch model loader at module import time.
 from depth_anything_3.services.inference_service import run_inference
 from depth_anything_3.services.input_handlers import (
     ColmapHandler,
@@ -668,6 +670,9 @@ def backend(
 
     typer.echo("=" * 60)
 
+    # Lazy import: pulls torch.
+    from depth_anything_3.services import start_server
+
     try:
         start_server(model_dir, device, host, port, gallery_dir)
     except KeyboardInterrupt:
@@ -785,6 +790,9 @@ def gallery(
         # Set command line arguments
         import sys
 
+        # Lazy import: avoids loading services at module-level.
+        from depth_anything_3.services.gallery import gallery as gallery_main
+
         sys.argv = ["gallery", "--dir", gallery_dir, "--host", host, "--port", str(port)]
         if open_browser:
             sys.argv.append("--open")
@@ -797,6 +805,294 @@ def gallery(
     except Exception as e:
         typer.echo(f"Failed to launch Gallery server: {e}")
         raise typer.Exit(1)
+
+
+# ============================================================================
+# ONNX commands
+# ============================================================================
+
+
+@app.command("onnx-export")
+def onnx_export(
+    model: str = typer.Argument(
+        ..., help="HF Hub repo id or local path of the torch model to export"
+    ),
+    out: str = typer.Option(..., help="Output .onnx file path (single-net case)"),
+    with_camera: bool = typer.Option(
+        False, "--with-camera", help="Bake `extrinsics`/`intrinsics` inputs into the graph"
+    ),
+    use_ray_pose: bool = typer.Option(
+        False, "--use-ray-pose", help="Bake `use_ray_pose=True` into the graph"
+    ),
+    ref_view_strategy: str = typer.Option(
+        "saddle_balanced",
+        help="Bake the reference-view strategy into the graph",
+    ),
+    nested: bool = typer.Option(
+        False, "--nested", help="Treat `model` as a NestedDepthAnything3Net and export both branches"
+    ),
+    out_main: str = typer.Option(
+        "", help="[Nested] Output path for the main branch (defaults to <out>.main.onnx)"
+    ),
+    out_metric: str = typer.Option(
+        "", help="[Nested] Output path for the metric branch (defaults to <out>.metric.onnx)"
+    ),
+    views: int = typer.Option(2, help="Number of views for the dummy export input"),
+    height: int = typer.Option(504, help="Dummy input height (multiple of 14)"),
+    width: int = typer.Option(504, help="Dummy input width (multiple of 14)"),
+    opset: int = typer.Option(17, help="ONNX opset version"),
+    device: str = typer.Option("cuda", help="Device used to trace the model"),
+):
+    """Export a torch DepthAnything3 model to ONNX. Requires `[torch]` extras."""
+    # Lazy import so users without torch can still run other CLI commands.
+    try:
+        from depth_anything_3.onnx.export import (
+            export_depth_anything_3,
+            export_depth_anything_3_nested,
+        )
+    except ImportError as e:
+        typer.echo(f"[onnx-export] Missing torch deps: {e}", err=True)
+        typer.echo(
+            "Install with: pip install -e .[torch,onnx]",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if nested:
+        main_path = out_main or f"{out}.main.onnx"
+        metric_path = out_metric or f"{out}.metric.onnx"
+        export_depth_anything_3_nested(
+            model_id_or_path=model,
+            out_main_path=main_path,
+            out_metric_path=metric_path,
+            with_camera=with_camera,
+            use_ray_pose=use_ray_pose,
+            ref_view_strategy=ref_view_strategy,
+            views=views,
+            height=height,
+            width=width,
+            opset_version=opset,
+            device=device,
+        )
+        typer.echo(f"Exported nested model:\n  main:   {main_path}\n  metric: {metric_path}")
+    else:
+        export_depth_anything_3(
+            model_id_or_path=model,
+            out_path=out,
+            with_camera=with_camera,
+            use_ray_pose=use_ray_pose,
+            ref_view_strategy=ref_view_strategy,
+            views=views,
+            height=height,
+            width=width,
+            opset_version=opset,
+            device=device,
+        )
+        typer.echo(f"Exported: {out}")
+
+
+@app.command("onnx")
+def onnx_infer(
+    input_path: str = typer.Argument(
+        ..., help="Path to input (image, directory of images, or video)"
+    ),
+    model: str = typer.Option(
+        ..., help="Path to the .onnx file (single-net) or HF spec `user/repo[:file]`"
+    ),
+    metric_model: str = typer.Option(
+        "",
+        help="[Nested] Path to the metric branch .onnx file. If set, the nested API is used.",
+    ),
+    providers: str = typer.Option(
+        "cuda,cpu",
+        help="Comma-separated providers in priority order. Supported aliases: cuda, cpu, tensorrt, dml, coreml.",
+    ),
+    export_dir: str = typer.Option(DEFAULT_EXPORT_DIR, help="Export directory"),
+    export_format: str = typer.Option("glb", help="Export format"),
+    process_res: int = typer.Option(
+        504,
+        help="Processing resolution. Must match the ONNX model's trace H/W when using square_resize.",
+    ),
+    process_res_method: str = typer.Option(
+        "upper_bound_resize_padded",
+        help=(
+            "Preprocessing method. Default 'upper_bound_resize_padded' = the DA3 "
+            "'upper_bound_resize' aspect-preserving resize + constant padding to "
+            "(process_res, process_res), so a fixed-square ONNX export sees an undistorted "
+            "image with neutral gray bars. Use 'square_resize' to squash directly to "
+            "(process_res, process_res) instead."
+        ),
+    ),
+    auto_cleanup: bool = typer.Option(
+        False, help="Automatically clean export directory if it exists"
+    ),
+    conf_thresh_percentile: float = typer.Option(
+        40.0, help="[GLB] Lower percentile for adaptive confidence threshold"
+    ),
+    num_max_points: int = typer.Option(
+        1_000_000, help="[GLB] Maximum number of points in the point cloud"
+    ),
+    show_cameras: bool = typer.Option(
+        True, help="[GLB] Show camera wireframes in the exported scene"
+    ),
+    feat_vis_fps: int = typer.Option(15, help="[FEAT_VIS] Frame rate for output video"),
+    fps: float = typer.Option(1.0, help="[Video] Sampling FPS for frame extraction"),
+):
+    """Run ONNX-runtime inference on an image / directory / video.
+
+    Requires `[onnx]` (CPU) or `[onnx-gpu]` (CUDA) extras.
+    """
+    # Lazy imports so users without onnxruntime can still call other commands.
+    try:
+        from depth_anything_3.onnx import (
+            DepthAnything3Onnx,
+            DepthAnything3OnnxNested,
+        )
+    except ImportError as e:
+        typer.echo(f"[onnx] Missing onnxruntime: {e}", err=True)
+        typer.echo("Install with: pip install -e .[onnx]  (or .[onnx-gpu])", err=True)
+        raise typer.Exit(1)
+
+    provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+
+    if metric_model:
+        runner = DepthAnything3OnnxNested(model, metric_model, providers=provider_list)
+    else:
+        runner = DepthAnything3Onnx(model, providers=provider_list)
+
+    # Reuse the same input handlers as the torch path
+    input_type = detect_input_type(input_path)
+    if input_type == "image":
+        image_files = ImageHandler.process(input_path)
+    elif input_type == "images":
+        image_files = ImagesHandler.process(input_path, "png,jpg,jpeg")
+    elif input_type == "video":
+        export_dir = InputHandler.handle_export_dir(export_dir, auto_cleanup)
+        image_files = VideoHandler.process(input_path, export_dir, fps)
+    elif input_type == "colmap":
+        image_files, _, _ = ColmapHandler.process(input_path, "")
+    else:
+        typer.echo(f"❌ Cannot determine input type for: {input_path}", err=True)
+        raise typer.Exit(1)
+
+    if input_type != "video":
+        export_dir = InputHandler.handle_export_dir(export_dir, auto_cleanup)
+
+    runner.inference(
+        image=image_files,
+        process_res=process_res,
+        process_res_method=process_res_method,
+        export_dir=export_dir,
+        export_format=export_format,
+        conf_thresh_percentile=conf_thresh_percentile,
+        num_max_points=num_max_points,
+        show_cameras=show_cameras,
+        feat_vis_fps=feat_vis_fps,
+    )
+    typer.echo(f"✅ ONNX inference complete. Results in {export_dir}")
+
+
+@app.command("onnx-parity")
+def onnx_parity(
+    model: str = typer.Argument(
+        ..., help="HF Hub repo id or local path of the torch model to compare against"
+    ),
+    image: list[str] = typer.Option(
+        ..., "--image", help="Image path; repeat to compare on multiple images"
+    ),
+    onnx: str = typer.Option(
+        "", help="Existing .onnx file to compare against. If empty, the model is exported first."
+    ),
+    with_camera: bool = typer.Option(
+        False, "--with-camera", help="Use the calibrated graph (extrinsics+intrinsics inputs)"
+    ),
+    use_ray_pose: bool = typer.Option(
+        False, "--use-ray-pose", help="Bake use_ray_pose into both runs"
+    ),
+    ref_view_strategy: str = typer.Option("saddle_balanced", help="Reference view strategy"),
+    process_res: int = typer.Option(504, help="Processing resolution"),
+    process_res_method: str = typer.Option(
+        "upper_bound_resize_padded",
+        help=(
+            "Preprocessing method. Default 'upper_bound_resize_padded' matches the "
+            "fixed-square ONNX export with no aspect distortion (DA3 upper_bound_resize + "
+            "constant padding). Pass 'square_resize' for the squashing variant, or one of "
+            "the legacy DA3 modes ('upper_bound_resize' / 'lower_bound_resize' / "
+            "'upper_bound_crop' / 'lower_bound_crop') — those won't work with a "
+            "fixed-shape ONNX when the input isn't square."
+        ),
+    ),
+    providers: str = typer.Option(
+        "cuda,cpu", help="onnxruntime providers (comma-separated). Aliases: cuda, cpu, tensorrt."
+    ),
+    device: str = typer.Option("cuda", help="Device for the torch path"),
+    keep_onnx: bool = typer.Option(
+        True, help="Keep the temporarily exported .onnx file and print its path"
+    ),
+    fail_threshold: float = typer.Option(
+        5e-2,
+        help="Fail (exit 2) if depth max-rel error exceeds this threshold",
+    ),
+    out_dir: str = typer.Option(
+        "",
+        help="If set, write side-by-side depth visualizations (torch, onnx, diff) + arrays.npz here",
+    ),
+    metric: str = typer.Option(
+        "auto",
+        help="Force the depth unit label in the compare plot: 'metric' (meters), "
+        "'relative' (depth-units), or 'auto' (detect from is_metric flag / model name)",
+    ),
+):
+    """Compare torch vs ONNX inference on the same images and print diff stats.
+
+    Requires BOTH `[torch]` and `[onnx]` (or `[onnx-gpu]`) extras.
+    """
+    try:
+        from depth_anything_3.onnx.parity import compare_torch_vs_onnx
+    except ImportError as e:
+        typer.echo(f"[onnx-parity] missing deps: {e}", err=True)
+        typer.echo("Install with: pip install -e .[torch,onnx]", err=True)
+        raise typer.Exit(1)
+
+    provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+    metric_arg = metric.lower().strip()
+    if metric_arg == "metric":
+        is_metric_override: bool | None = True
+    elif metric_arg in ("relative", "non-metric", "nonmetric"):
+        is_metric_override = False
+    else:
+        is_metric_override = None  # auto
+    report = compare_torch_vs_onnx(
+        model=model,
+        images=image,
+        onnx_path=onnx or None,
+        with_camera=with_camera,
+        use_ray_pose=use_ray_pose,
+        ref_view_strategy=ref_view_strategy,
+        process_res=process_res,
+        process_res_method=process_res_method,
+        providers=provider_list,
+        device=device,
+        keep_onnx=keep_onnx,
+        out_dir=out_dir or None,
+        is_metric=is_metric_override,
+    )
+    typer.echo(report.summary())
+
+    depth_diff = next((d for d in report.diffs if d.name == "depth"), None)
+    if depth_diff is None:
+        typer.echo("\n[!] No depth field in report.", err=True)
+        raise typer.Exit(1)
+    if depth_diff.max_rel > fail_threshold:
+        typer.echo(
+            f"\n[!] Depth max-rel error {depth_diff.max_rel:.3g} exceeds fail_threshold "
+            f"{fail_threshold:.3g}",
+            err=True,
+        )
+        raise typer.Exit(2)
+    typer.echo(
+        f"\n✅ Parity OK (depth max-rel={depth_diff.max_rel:.3g} <= {fail_threshold:.3g})"
+    )
 
 
 if __name__ == "__main__":

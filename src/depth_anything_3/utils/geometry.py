@@ -19,6 +19,13 @@ import torch
 import torch.nn.functional as F
 from einops import einsum
 
+# Numpy-only helpers were factored out so they can be imported on systems
+# without torch installed (used by `depth_anything_3.onnx.*`).
+from depth_anything_3.utils.numpy_geometry import (  # noqa: F401  -- re-exported
+    affine_inverse_np,
+    transpose_last_two_axes,
+)
+
 
 def as_homogeneous(ext):
     """
@@ -57,31 +64,6 @@ def affine_inverse(A: torch.Tensor):
     T = A[..., :3, 3:]  # ..., 3, 1
     P = A[..., 3:, :]  # ..., 1, 4
     return torch.cat([torch.cat([R.mT, -R.mT @ T], dim=-1), P], dim=-2)
-
-
-def transpose_last_two_axes(arr):
-    """
-    for np < 2
-    """
-    if arr.ndim < 2:
-        return arr
-    axes = list(range(arr.ndim))
-    # swap the last two
-    axes[-2], axes[-1] = axes[-1], axes[-2]
-    return arr.transpose(axes)
-
-
-def affine_inverse_np(A: np.ndarray):
-    R = A[..., :3, :3]
-    T = A[..., :3, 3:]
-    P = A[..., 3:, :]
-    return np.concatenate(
-        [
-            np.concatenate([transpose_last_two_axes(R), -transpose_last_two_axes(R) @ T], axis=-1),
-            P,
-        ],
-        axis=-2,
-    )
 
 
 def quat_to_mat(quaternions: torch.Tensor) -> torch.Tensor:

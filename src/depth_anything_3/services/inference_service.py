@@ -19,10 +19,12 @@ Provides unified interface for local and remote inference
 
 from typing import Any, Dict, List, Optional, Union
 import numpy as np
-import requests
 import typer
 
-from ..api import DepthAnything3
+# `requests` is only used by the backend-HTTP client path. Importing it
+# at module level would force every `da3` command (including the local
+# ONNX path) to depend on `requests`. Lazy-import inside the two methods
+# that actually need it.
 
 
 class InferenceService:
@@ -36,6 +38,11 @@ class InferenceService:
     def load_model(self):
         """Load model"""
         if self.model is None:
+            # Lazy import: only the torch path needs `DepthAnything3`. Loading
+            # this module without torch installed must continue to work so
+            # that the ONNX CLI commands can run.
+            from ..api import DepthAnything3
+
             typer.echo(f"Loading model from {self.model_dir}...")
             self.model = DepthAnything3.from_pretrained(self.model_dir).to(self.device)
         return self.model
@@ -146,7 +153,9 @@ class InferenceService:
         if intrinsics is not None:
             payload["intrinsics"] = [intr.astype(np.float64).tolist() for intr in intrinsics]
 
-        # Submit task
+        # Submit task -- `requests` is lazy-imported (see module docstring).
+        import requests
+
         typer.echo("Submitting inference task to backend...")
         try:
             response = requests.post(f"{backend_url}/inference", json=payload, timeout=30)
@@ -169,6 +178,8 @@ class InferenceService:
 
     def _check_backend_status(self, backend_url: str) -> bool:
         """Check backend status"""
+        import requests
+
         try:
             response = requests.get(f"{backend_url}/status", timeout=5)
             return response.status_code == 200

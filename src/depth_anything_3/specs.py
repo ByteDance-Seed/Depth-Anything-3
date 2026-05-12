@@ -17,18 +17,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 import numpy as np
-import torch
+
+if False:  # TYPE_CHECKING-style import, never executed at runtime
+    import torch  # noqa: F401
 
 
 @dataclass
 class Gaussians:
     """3DGS parameters, all in world space"""
 
-    means: torch.Tensor  # world points, "batch gaussian dim"
-    scales: torch.Tensor  # scales_std, "batch gaussian 3"
-    rotations: torch.Tensor  # world_quat_wxyz, "batch gaussian 4"
-    harmonics: torch.Tensor  # world SH, "batch gaussian 3 d_sh"
-    opacities: torch.Tensor  # opacity | opacity SH, "batch gaussian" | "batch gaussian 1 d_sh"
+    means: "torch.Tensor"  # world points, "batch gaussian dim"
+    scales: "torch.Tensor"  # scales_std, "batch gaussian 3"
+    rotations: "torch.Tensor"  # world_quat_wxyz, "batch gaussian 4"
+    harmonics: "torch.Tensor"  # world SH, "batch gaussian 3 d_sh"
+    opacities: "torch.Tensor"  # opacity | opacity SH, "batch gaussian" | "batch gaussian 1 d_sh"
 
 
 @dataclass

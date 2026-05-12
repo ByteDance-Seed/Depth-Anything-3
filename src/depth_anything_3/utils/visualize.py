@@ -12,12 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import matplotlib
+from typing import TYPE_CHECKING
+
 import numpy as np
-import torch
-from einops import rearrange
 
 from depth_anything_3.utils.logger import logger
+
+if TYPE_CHECKING:
+    import matplotlib  # noqa: F401  -- type hint only
+    import torch  # noqa: F401  -- type hint only
+
+
+def _require_matplotlib():
+    """Lazy-import matplotlib with a friendly error message.
+
+    matplotlib is in the optional ``[viz]`` extra rather than the core deps
+    because the ONNX inference path itself doesn't need it -- only the
+    depth visualization helpers and the parity compare plots do.
+    """
+    try:
+        import matplotlib
+        return matplotlib
+    except ImportError as e:
+        raise ImportError(
+            "matplotlib is required for depth visualization (`depth_vis` export "
+            "and parity compare plots). Install with `pip install -e .[viz]` "
+            "or `pip install matplotlib`."
+        ) from e
 
 
 def visualize_depth(
@@ -62,6 +83,7 @@ def visualize_depth(
     if depth_min == depth_max:
         depth_min = depth_min - 1e-6
         depth_max = depth_max + 1e-6
+    matplotlib = _require_matplotlib()
     cm = matplotlib.colormaps[cmap]
     depth = ((depth - depth_min) / (depth_max - depth_min)).clip(0, 1)
     depth = 1 - depth
@@ -82,12 +104,14 @@ def visualize_depth(
 
 
 def vis_depth_map_tensor(
-    result: torch.Tensor,  # "*batch height width"
+    result: "torch.Tensor",  # "*batch height width"
     color_map: str = "Spectral",
-) -> torch.Tensor:  # "*batch 3 height with"
+) -> "torch.Tensor":  # "*batch 3 height with"
     """
     Color-map the depth map.
     """
+    import torch
+
     far = result.reshape(-1)[:16_000_000].float().quantile(0.99).log().to(result)
     try:
         near = result[result > 0][:16_000_000].float().quantile(0.01).log().to(result)
@@ -100,9 +124,12 @@ def vis_depth_map_tensor(
 
 
 def apply_color_map(
-    x: torch.Tensor,  # " *batch"
+    x: "torch.Tensor",  # " *batch"
     color_map: str = "inferno",
-) -> torch.Tensor:  # "*batch 3"
+) -> "torch.Tensor":  # "*batch 3"
+    import torch
+
+    matplotlib = _require_matplotlib()
     cmap = matplotlib.cm.get_cmap(color_map)
 
     # Convert to NumPy so that Matplotlib color maps can be used.
@@ -113,8 +140,10 @@ def apply_color_map(
 
 
 def apply_color_map_to_image(
-    image: torch.Tensor,  # "*batch height width"
+    image: "torch.Tensor",  # "*batch height width"
     color_map: str = "inferno",
-) -> torch.Tensor:  # "*batch 3 height with"
+) -> "torch.Tensor":  # "*batch 3 height with"
+    from einops import rearrange
+
     image = apply_color_map(image, color_map)
     return rearrange(image, "... h w c -> ... c h w")

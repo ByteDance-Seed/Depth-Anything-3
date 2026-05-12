@@ -12,13 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Services module for Depth Anything 3.
+"""Services module for Depth Anything 3.
+
+`backend` is lazy-imported because it requires torch (it runs the PyTorch
+`DepthAnything3` API). Loading `depth_anything_3.services` should be cheap
+and torch-free so the ONNX CLI commands work without `[torch]` installed.
 """
 
-from depth_anything_3.services.backend import create_app, start_server
 
-__all__ = [
-    start_server,
-    create_app,
-]
+def __getattr__(name):
+    if name in ("create_app", "start_server"):
+        # Lazy-import: requires torch via .backend -> ..api -> ..model -> torch
+        from depth_anything_3.services.backend import create_app, start_server
+
+        return {"create_app": create_app, "start_server": start_server}[name]
+    raise AttributeError(f"module 'depth_anything_3.services' has no attribute {name!r}")
+
+
+__all__ = ["create_app", "start_server"]

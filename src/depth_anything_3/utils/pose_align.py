@@ -12,23 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List
+from typing import TYPE_CHECKING, List
 import numpy as np
-import torch
-from evo.core.trajectory import PosePath3D
 
-from depth_anything_3.utils.geometry import affine_inverse, affine_inverse_np
+from depth_anything_3.utils.numpy_geometry import affine_inverse_np
+
+if TYPE_CHECKING:
+    import torch
+    from evo.core.trajectory import PosePath3D  # noqa: F401  -- type hint only
 
 
 def batch_apply_alignment_to_enc(
-    rots: torch.Tensor, trans: torch.Tensor, scales: torch.Tensor, enc_list: List[torch.Tensor]
+    rots: "torch.Tensor",
+    trans: "torch.Tensor",
+    scales: "torch.Tensor",
+    enc_list: "List[torch.Tensor]",
 ):
     pass
 
 
 def batch_apply_alignment_to_ext(
-    rots: torch.Tensor, trans: torch.Tensor, scales: torch.Tensor, ext: torch.Tensor
+    rots: "torch.Tensor", trans: "torch.Tensor", scales: "torch.Tensor", ext: "torch.Tensor"
 ):
+    import torch
+
+    from depth_anything_3.utils.geometry import affine_inverse
+
     device, _ = ext.device, ext.dtype
     if ext.shape[-2:] == (3, 4):
         pad = torch.zeros((*ext.shape[:-2], 4, 4), dtype=ext.dtype, device=device)
@@ -47,7 +56,9 @@ def batch_apply_alignment_to_ext(
     return affine_inverse(pose_new_align)[:, :3]
 
 
-def batch_align_poses_umeyama(ext_ref: torch.Tensor, ext_est: torch.Tensor):
+def batch_align_poses_umeyama(ext_ref: "torch.Tensor", ext_est: "torch.Tensor"):
+    import torch
+
     device, dtype = ext_ref.device, ext_ref.dtype
     assert ext_ref.dtype in [torch.float32, torch.float64]
     assert ext_est.dtype in [torch.float32, torch.float64]
@@ -82,6 +93,12 @@ def _poses_from_ext(ext_ref, ext_est):
 
 
 def _umeyama_sim3_from_paths(pose_ref, pose_est):
+    # `evo` is the only place we use it in this module. Importing it here
+    # rather than at module load means a vanilla ONNX-inference install
+    # (which doesn't do pose alignment) doesn't need to pull in evo and
+    # its transitive deps just to import `depth_anything_3.onnx`.
+    from evo.core.trajectory import PosePath3D
+
     path_ref = PosePath3D(poses_se3=pose_ref.copy())
     path_est = PosePath3D(poses_se3=pose_est.copy())
     r, t, s = path_est.align(path_ref, correct_scale=True)
