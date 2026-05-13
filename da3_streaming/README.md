@@ -156,7 +156,6 @@ We also evaluate `DA3-Streaming` with different chunk sizes on KITTI (w/o 01) wi
 Our project is based on [VGGT-Long](https://github.com/DengKaiCQ/VGGT-Long) and [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3).
 
 
-```markdown
 # DA3-Live
 
 Real-time 3D reconstruction from video/webcam.
@@ -189,4 +188,3 @@ Output: `exps/video_*/pcd/combined_pcd.ply` + `frames_result/output_sidebyside.m
 
 **Video/webcam**: true streaming, bounded RAM  
 **Images**: batch mode, supports loop closure
-```
