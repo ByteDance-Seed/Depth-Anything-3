@@ -188,3 +188,6 @@ Output: `exps/video_*/pcd/combined_pcd.ply` + `frames_result/output_sidebyside.m
 
 **Video/webcam**: true streaming, bounded RAM  
 **Images**: batch mode, supports loop closure
+
+## Demo
+https://github.com/user-attachments/assets/c615b583-b2d4-4c27-8f70-4b852c3782de
