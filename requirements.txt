@@ -7,7 +7,7 @@ huggingface_hub
 imageio
 numpy<2
 opencv-python
-xformers; sys_platform != 'darwin'
+# xformers # Commented out to support macOS/MPS/CPU (CUDA-only)
 open3d
 fastapi
 uvicorn
