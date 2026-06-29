@@ -21,7 +21,7 @@ dependencies = [
     "imageio",
     "numpy<2",
     "opencv-python",
-    # "xformers", # Commented out to support macOS/MPS/CPU (xformers is CUDA-only)
+    "xformers; sys_platform != 'darwin'",
     "open3d",
     "fastapi",
     "uvicorn",
@@ -43,9 +43,8 @@ dependencies = [
 
 [project.optional-dependencies]
 app = ["gradio>=5", "pillow>=9.0"] # requires that python3>=3.10
-# Commented out to support macOS/MPS/CPU (gsplat requires CUDA compilation)
-# gs = ["gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70"]
-# all = ["depth-anything-3[app,gs]"]
+gs = ["gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70; sys_platform != 'darwin'"]
+all = ["depth-anything-3[app,gs]"]
 
 
 [project.scripts]
