@@ -16,7 +16,7 @@ class FinetuneConfig:
     proc_res: int = 504
     canonical_focal: float = 300.0
     dataset_focal_at_orig: float = 300.0
-    subset_size: Optional[int] = 1000
+    subset_size: Optional[int] = None  # None = full training set (was 1000: a silent-cap footgun)
     valid_index_cache: Path = Path("./finetune_cache")
     rebuild_index: bool = False
 
@@ -43,6 +43,7 @@ class FinetuneConfig:
     log_every: int = 20
     val_every_steps: int = 500
     val_max_batches: int = 20
+    save_every_epochs: int = 1  # save a checkpoint every N epochs (last epoch always saved)
     ckpt_dir: Path = Path("./checkpoints/drone_v59")
     run_name: str = "smoke"
     seed: int = 0
@@ -93,6 +94,7 @@ _TYPE_MAP = {
     "log_every": int,
     "val_every_steps": int,
     "val_max_batches": int,
+    "save_every_epochs": int,
     "ckpt_dir": Path,
     "run_name": str,
     "seed": int,

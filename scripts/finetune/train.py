@@ -266,7 +266,9 @@ def main() -> None:
                 return
 
         pbar.close()
-        save_checkpoint(cfg, net, epoch=epoch, step=step)
+        is_last_epoch = epoch == cfg.epochs - 1
+        if is_last_epoch or (epoch + 1) % cfg.save_every_epochs == 0:
+            save_checkpoint(cfg, net, epoch=epoch, step=step)
         if val_loader is not None:
             run_validation(
                 net, val_loader, cfg, device, canonical_over_processed, step,
