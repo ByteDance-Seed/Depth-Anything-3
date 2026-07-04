@@ -96,7 +96,7 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         # Device management (set by user)
         self.device = None
 
-    @torch.inference_mode()
+    @torch.no_grad()  # alix: torch.inference_mode() poisons nn.Parameter buffers on subsequent calls (PyTorch #90882)
     def forward(
         self,
         image: torch.Tensor,
