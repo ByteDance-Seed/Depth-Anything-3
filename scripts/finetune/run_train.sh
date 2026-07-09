@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 # ---- data ----
-DATA_ROOT=/home/derek_austin/Depth-Anything-3/datasets/drone_v60_depth
+DATA_ROOT=/home/derek_austin/Depth-Anything-3/datasets/drone_v64_depth
 TRAIN_SPLIT=train
 VAL_SPLIT=valid                   # set to None if you don't have a val/ folder yet
 SUBSET_SIZE=None                # None = use full training set
@@ -34,8 +34,8 @@ AMP_DTYPE=bfloat16              # bfloat16 | float16 | float32
 LOG_EVERY=20
 VAL_EVERY_STEPS=8000
 VAL_MAX_BATCHES=20
-CKPT_DIR=./checkpoints/drone_v60
-RUN_NAME="run_$(date +%Y%m%d_%H%M%S)_depth"
+CKPT_DIR=./checkpoints/drone_v64
+RUN_NAME="run_$(date +%Y%m%d_%H%M%S)_v64_depth"
 SEED=0
 
 # ---- wandb ----
