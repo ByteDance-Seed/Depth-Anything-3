@@ -122,8 +122,15 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
         Returns:
             Dictionary containing model predictions
         """
-        # Determine optimal autocast dtype
-        autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # Determine optimal autocast dtype. Only pick bf16 where it is natively supported:
+        # on GPUs that merely emulate bf16 (e.g. Turing/sm_75), SDPA's memory-efficient
+        # kernel rejects bf16 and attention falls back to the math backend, which
+        # materializes the full attention matrix in fp32 and OOMs on multi-view inputs.
+        autocast_dtype = (
+            torch.bfloat16
+            if torch.cuda.is_bf16_supported(including_emulation=False)
+            else torch.float16
+        )
         with torch.no_grad():
             with torch.autocast(device_type=image.device.type, dtype=autocast_dtype):
                 return self.model(
