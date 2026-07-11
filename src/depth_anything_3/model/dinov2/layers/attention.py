@@ -62,11 +62,7 @@ class Attention(nn.Module):
                 k,
                 v,
                 dropout_p=self.attn_drop.p if self.training else 0.0,
-                attn_mask=(
-                    (attn_mask)[:, None].repeat(1, self.num_heads, 1, 1)
-                    if attn_mask is not None
-                    else None
-                ),
+                attn_mask=attn_mask[:, None] if attn_mask is not None else None,
             )
         else:
             q = q * self.scale
