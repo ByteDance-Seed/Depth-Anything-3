@@ -35,7 +35,7 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 
 RUN pip install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu124
 
-RUN pip install --no-cache-dir hatchling hatch-vcs && \
+RUN pip install --no-cache-dir hatchling hatch-vcs editables && \
     pip install --no-cache-dir -e ".[all]" --no-build-isolation
 
 EXPOSE 7860
