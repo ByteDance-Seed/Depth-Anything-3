@@ -35,6 +35,8 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 
 RUN pip install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu124
 
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+
 RUN pip install --no-cache-dir hatchling hatch-vcs editables && \
     pip install --no-cache-dir -e ".[all]" --no-build-isolation
 
