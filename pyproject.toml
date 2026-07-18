@@ -12,6 +12,7 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Your Name" }]
 
 dependencies = [
+    "addict",
     "pre-commit",
     "trimesh",
     "torch>=2",
