@@ -14,6 +14,7 @@ services:
       - 7860:7860
     volumes:
       - ./workspace:/app/workspace
+      - ./models:/root/.cache/huggingface/hub
     deploy:
       resources:
         reservations:
