@@ -1,0 +1,23 @@
+services:
+  # Use: docker exec -it da3-backend bash
+  # To create a bash session inside the container to run commands like: da3 auto --use-backend --backend-url http://localhost:7860 --export-dir workspace/gallery/scene001 workspace/input
+  da3-backend:
+    container_name: da3-backend
+    image: ghcr.io/bytedance-seed/depth-anything-3:main
+    command: backend --model-dir depth-anything/DA3-LARGE-1.1 --port 7860 --host 0.0.0.0 --allow-unauthenticated
+    build:
+      dockerfile: Dockerfile
+      context: .
+    tty: true
+    stdin_open: true
+    ports:
+      - 7860:7860
+    volumes:
+      - ./workspace:/app/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all # To use specifics GPUs --> device_ids: ['0']
+              capabilities: [ gpu ]
