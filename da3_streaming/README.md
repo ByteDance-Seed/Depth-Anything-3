@@ -154,3 +154,40 @@ We also evaluate `DA3-Streaming` with different chunk sizes on KITTI (w/o 01) wi
 ## Acknowledgements
 
 Our project is based on [VGGT-Long](https://github.com/DengKaiCQ/VGGT-Long) and [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3).
+
+
+# DA3-Live
+
+Real-time 3D reconstruction from video/webcam.
+
+## Run
+
+```bash
+bash setup_da3.sh
+
+# Video
+python da3_live.py --video video.mp4 --headless
+
+# Webcam
+python da3_live.py --video 0 --headless
+
+# Images
+python da3_live.py --image_dir /path/to/images --headless
+```
+
+Output: `exps/video_*/pcd/combined_pcd.ply` + `frames_result/output_sidebyside.mp4`
+
+## How It Works
+
+1. Read `chunk_size` frames
+2. Run DA3 inference (depth + poses)
+3. Align with previous chunk via Sim3
+4. Accumulate point cloud, render preview
+5. Discard old frames, repeat
+6. Save final aligned PLYs
+
+**Video/webcam**: true streaming, bounded RAM  
+**Images**: batch mode, supports loop closure
+
+## Demo
+https://github.com/user-attachments/assets/c615b583-b2d4-4c27-8f70-4b852c3782de
