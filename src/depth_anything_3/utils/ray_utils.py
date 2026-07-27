@@ -18,7 +18,7 @@ from .geometry import unproject_depth
 
 
 def compute_optimal_rotation_intrinsics_batch(
-    rays_origin, rays_target, z_threshold=1e-4, reproj_threshold=0.2, weights=None,
+    rays_direction, rays_target, z_threshold=1e-4, reproj_threshold=0.2, weights=None,
     n_sample = None,
     n_iter=100,
     num_sample_for_ransac=8,
@@ -26,7 +26,7 @@ def compute_optimal_rotation_intrinsics_batch(
 ):
     """
     Args:
-        rays_origin (torch.Tensor): (B, N, 3)
+        rays_direction (torch.Tensor): (B, N, 3)
         rays_target (torch.Tensor): (B, N, 3)
         z_threshold (float): Threshold for z value to be considered valid.
 
@@ -35,28 +35,28 @@ def compute_optimal_rotation_intrinsics_batch(
         focal_length (torch.tensor): (2,)
         principal_point (torch.tensor): (2,)
     """
-    device = rays_origin.device
-    B, N, _ = rays_origin.shape
+    device = rays_direction.device
+    B, N, _ = rays_direction.shape
     z_mask = torch.logical_and(
-        torch.abs(rays_target[:, :, 2]) > z_threshold, torch.abs(rays_origin[:, :, 2]) > z_threshold
+        torch.abs(rays_target[:, :, 2]) > z_threshold, torch.abs(rays_direction[:, :, 2]) > z_threshold
     ) # (B, N, 1)
-    rays_origin = rays_origin.clone()
+    rays_direction = rays_direction.clone()
     rays_target = rays_target.clone()
-    rays_origin[:, :, 0][z_mask] /= rays_origin[:, :, 2][z_mask]
-    rays_origin[:, :, 1][z_mask] /= rays_origin[:, :, 2][z_mask]
+    rays_direction[:, :, 0][z_mask] /= rays_direction[:, :, 2][z_mask]
+    rays_direction[:, :, 1][z_mask] /= rays_direction[:, :, 2][z_mask]
     rays_target[:, :, 0][z_mask] /= rays_target[:, :, 2][z_mask]
     rays_target[:, :, 1][z_mask] /= rays_target[:, :, 2][z_mask]
 
-    rays_origin = rays_origin[:, :, :2]
+    rays_direction = rays_direction[:, :, :2]
     rays_target = rays_target[:, :, :2]
     assert weights is not None, "weights must be provided"
     weights[~z_mask] = 0 
 
     A_list = []
     max_chunk_size = 2
-    for i in range(0, rays_origin.shape[0], max_chunk_size):
+    for i in range(0, rays_direction.shape[0], max_chunk_size):
         A = ransac_find_homography_weighted_fast_batch(
-            rays_origin[i:i+max_chunk_size],
+            rays_direction[i:i+max_chunk_size],
             rays_target[i:i+max_chunk_size],
             weights[i:i+max_chunk_size],
             n_iter=n_iter,
