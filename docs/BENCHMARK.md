@@ -151,6 +151,10 @@ workspace/benchmark_dataset/
 | `pose` | Camera pose estimation | AUC@3°, AUC@30° |
 | `recon_unposed` | 3D reconstruction with **predicted** poses | F-score, Overall |
 | `recon_posed` | 3D reconstruction with **GT** poses | F-score, Overall |
+| `rel_depth` | **Relative depth** (scale/affine-invariant) | Abs Rel, δ@1.03/1.25 |
+| `metric_depth` | **Metric depth** (no alignment) | Abs Rel, δ@1.03/1.25, metric scale error/rel |
+
+Depth modes write JSON files to `metric_results/{dataset}_{mode}.json`. They reuse the unposed inference export (`.../unposed/exports/mini_npz/results.npz`).
 
 ### Basic Usage
 

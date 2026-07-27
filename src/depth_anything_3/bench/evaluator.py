@@ -32,6 +32,11 @@ import torch
 from addict import Dict
 from tqdm import tqdm
 
+from depth_anything_3.bench.depth_metrics import (
+    DepthEvalConfig,
+    compute_depth_metrics,
+    resize_depth_nearest,
+)
 from depth_anything_3.bench.print_metrics import MetricsPrinter
 from depth_anything_3.utils.parallel_utils import parallel_execution
 from depth_anything_3.bench.registries import MV_REGISTRY
@@ -54,7 +59,7 @@ class Evaluator:
         evaluator.print_metrics()
     """
 
-    VALID_MODES = {"pose", "recon_unposed", "recon_posed", "view_syn"}
+    VALID_MODES = {"pose", "recon_unposed", "recon_posed", "view_syn", "rel_depth", "metric_depth"}
 
     def __init__(
         self,
@@ -135,7 +140,13 @@ class Evaluator:
         """Get list of scenes to evaluate, optionally filtered."""
         all_scenes = dataset.SCENES
         if self.scenes_filter:
-            scenes = [s for s in all_scenes if s in self.scenes_filter]
+            # Normalize scenes_filter to a list of strings (handles single str/int inputs).
+            if isinstance(self.scenes_filter, (str, int)):
+                scene_filter = [str(self.scenes_filter)]
+            else:
+                scene_filter = [str(s) for s in self.scenes_filter]
+
+            scenes = [s for s in all_scenes if s in scene_filter]
             if self.debug:
                 print(f"[DEBUG] Filtered scenes: {scenes} (from {len(all_scenes)} total)")
             return scenes
@@ -155,9 +166,10 @@ class Evaluator:
             api: DepthAnything3 API instance
             model_path: Model path (unused, kept for API compatibility)
         """
-        need_unposed = {"pose", "recon_unposed"} & self.modes
+        need_unposed = {"pose", "recon_unposed", "rel_depth", "metric_depth"} & self.modes
         need_posed = {"recon_posed", "view_syn"} & self.modes
         export_format = "mini_npz-glb" if self.debug else "mini_npz"
+        # export_format="mini_npz-glb-npz-colmap"
 
         # Collect all tasks
         all_tasks = []
@@ -222,6 +234,19 @@ class Evaluator:
             print(f"{'='*60}")
             for data, result in self._eval_pose():
                 summary[f"{data}_pose"] = result
+
+        # Depth quality (relative + metric)
+        if "rel_depth" in self.modes:
+            print(f"\n{'='*60}")
+            print(f"📏 Evaluating RELATIVE DEPTH for all datasets...")
+            print(f"{'='*60}")
+            summary.update(self._eval_depth(mode="rel_depth"))
+
+        if "metric_depth" in self.modes:
+            print(f"\n{'='*60}")
+            print(f"📏 Evaluating METRIC DEPTH for all datasets...")
+            print(f"{'='*60}")
+            summary.update(self._eval_depth(mode="metric_depth"))
 
         if "recon_unposed" in self.modes:
             print(f"\n{'='*60}")
@@ -302,6 +327,131 @@ class Evaluator:
             out_path = os.path.join(self._metric_dir, f"{data}_pose.json")
             self._dump_json(out_path, dataset_results)
             yield data, dataset_results
+
+    def _eval_depth(self, mode: str) -> TDict[str, dict]:
+        """Evaluate depth quality against per-view GT depth maps."""
+        assert mode in {"rel_depth", "metric_depth"}
+        os.makedirs(self._metric_dir, exist_ok=True)
+
+        depth_datasets = {"hiroom", "eth3d", "7scenes", "scannetpp"}
+        eval_datasets = [d for d in self.datas if d in depth_datasets]
+
+        cfg = DepthEvalConfig()
+
+        all_metrics: TDict[str, dict] = {}
+        for data in eval_datasets:
+            dataset = self.datasets[data]
+            dataset_results = Dict()
+
+            scenes = self._get_scenes(dataset)
+            success = 0
+            for scene in scenes:
+                try:
+                    out_dir = self._export_dir(data, scene, posed=False)
+                    result_path = os.path.join(out_dir, "exports", "mini_npz", "results.npz")
+                    if not os.path.exists(result_path):
+                        raise FileNotFoundError(result_path)
+
+                    pred_npz = np.load(result_path)
+                    if "depth" not in pred_npz:
+                        raise KeyError("results.npz missing 'depth'")
+                    pred_depths = pred_npz["depth"]  # (N,H,W)
+
+                    # Load full GT data and map sampled frames -> full indices
+                    full_gt_data = dataset.get_data(scene)
+
+                    gt_meta_path = os.path.join(out_dir, "exports", "gt_meta.npz")
+                    if os.path.exists(gt_meta_path):
+                        gt_meta = np.load(gt_meta_path, allow_pickle=True)
+                        sampled_files = [str(p) for p in gt_meta["image_files"]]
+                        image_indices = [full_gt_data.image_files.index(f) for f in sampled_files]
+                    else:
+                        image_indices = list(range(len(full_gt_data.image_files)))
+
+                    per_img_metrics = []
+                    for i, img_idx in enumerate(image_indices[: pred_depths.shape[0]]):
+                        pred_depth = pred_depths[i].astype(np.float32)
+
+                        # Load GT depth + valid mask
+                        gt_depth, gt_valid = self._load_gt_depth_and_mask(
+                            data=data,
+                            dataset=dataset,
+                            scene=scene,
+                            full_gt_data=full_gt_data,
+                            img_idx=img_idx,
+                        )
+
+                        # Resize prediction to GT resolution if needed
+                        pred_depth = resize_depth_nearest(pred_depth, gt_depth.shape[:2])
+
+                        m = compute_depth_metrics(pred_depth, gt_depth, gt_valid, cfg=cfg)
+                        if not m:
+                            continue
+                        per_img_metrics.append(m)
+
+                    if not per_img_metrics:
+                        raise RuntimeError("No valid GT depth pixels for evaluation.")
+
+                    # Mean over images
+                    scene_metrics = self._mean_of_dicts(per_img_metrics)
+                    scene_metrics["num_views"] = float(len(per_img_metrics))
+                    scene_metrics["num_eval_imgs"] = float(len(per_img_metrics))
+
+                    # Prune per-mode JSON outputs to keep them readable:
+                    #  - metric_depth: only metric/no-alignment depth quality + scale error
+                    #  - rel_depth: only scale/affine-aligned (relative) depth quality
+                    if mode == "metric_depth":
+                        keep = [
+                            "abs_rel",
+                            "rmse",
+                            "rmse_log",
+                            "si_log",
+                            *[f"delta_{t}" for t in cfg.delta_thresholds],
+                            "scale_med",
+                            "metric_scale_rel",
+                            "metric_scale_log",
+                            "valid_pixels_pct",
+                            "num_views",
+                            "num_eval_imgs",
+                        ]
+                        scene_metrics = {k: scene_metrics[k] for k in keep if k in scene_metrics}
+                    elif mode == "rel_depth":
+                        keep = [
+                            "abs_rel_scale_med",
+                            *[f"delta_{t}_scale_med" for t in cfg.delta_thresholds],
+                            "abs_rel_affine_depth",
+                            *[f"delta_{t}_affine_depth" for t in cfg.delta_thresholds],
+                            "abs_rel_affine_disp",
+                            *[f"delta_{t}_affine_disp" for t in cfg.delta_thresholds],
+                            "valid_pixels_pct",
+                            "num_views",
+                            "num_eval_imgs",
+                        ]
+                        scene_metrics = {k: scene_metrics[k] for k in keep if k in scene_metrics}
+
+                    dataset_results[scene] = scene_metrics
+                    success += 1
+                except Exception as e:
+                    if self.debug:
+                        print(f"[WARN] depth eval failed for {data}/{scene}: {e}")
+
+            if success == 0:
+                continue
+
+            # Aggregate over scenes
+            dataset_results["mean"] = self._mean_of_dicts([v for k, v in dataset_results.items() if k != "mean"])
+            dataset_results["success_rate"] = float(success) / float(len(scenes)) * 100.0
+            dataset_results["_meta"] = {
+                "mode": mode,
+                "delta_thresholds": list(cfg.delta_thresholds),
+                "note": "Depth metrics are averaged per-image then per-scene.",
+            }
+
+            out_path = os.path.join(self._metric_dir, f"{data}_{mode}.json")
+            self._dump_json(out_path, dataset_results)
+            all_metrics[f"{data}_{mode}"] = dataset_results
+
+        return all_metrics
 
     def _eval_reconstruction(self, mode: str) -> Iterable[tuple]:
         """
@@ -423,6 +573,84 @@ class Evaluator:
             torch.from_numpy(as_homogeneous(pred["extrinsics"])),
             torch.from_numpy(as_homogeneous(gt_meta["extrinsics"])),
         )
+
+    def _load_gt_depth_and_mask(self, data: str, dataset, scene: str, full_gt_data, img_idx: int):
+        """Load GT depth (meters) and a boolean valid mask (True = valid)."""
+        import cv2
+        import imageio
+
+        data = data.lower()
+
+        if data == "eth3d":
+            img_path = full_gt_data.image_files[img_idx]
+            img_name = os.path.basename(img_path)
+
+            scene_dir = os.path.join(dataset.data_root, scene)
+            gt_depth_path = os.path.join(scene_dir, "ground_truth_depth", "dslr_images", img_name)
+            mask_name = os.path.splitext(img_name)[0] + ".png"
+            mask_candidates = [
+                os.path.join(scene_dir, "masks_for_images", "dslr_images", mask_name),
+                os.path.join(scene_dir, "ground_truth_masks", "dslr_images", img_name),
+            ]
+            gt_mask_path = next((p for p in mask_candidates if os.path.exists(p)), None)
+
+            if hasattr(full_gt_data, "aux") and hasattr(full_gt_data.aux, "heights"):
+                orig_h = int(full_gt_data.aux.heights[img_idx])
+                orig_w = int(full_gt_data.aux.widths[img_idx])
+            else:
+                im = cv2.imread(img_path)
+                if im is None:
+                    raise FileNotFoundError(f"Failed to read image for size: {img_path}")
+                orig_h, orig_w = im.shape[:2]
+
+            gt_depth = np.fromfile(gt_depth_path, dtype=np.float32).reshape(orig_h, orig_w)
+            invalid_from_depth = (gt_depth == 0) | (~np.isfinite(gt_depth))
+
+            gt_mask = cv2.imread(gt_mask_path, cv2.IMREAD_UNCHANGED) if gt_mask_path else None
+
+            if gt_mask is None:
+                invalid_from_mask = np.zeros_like(invalid_from_depth)
+            else:
+                invalid_from_mask = gt_mask == 1
+
+            valid = (~invalid_from_depth) & (~invalid_from_mask)
+            return gt_depth.astype(np.float32), valid.astype(bool)
+
+        aux = getattr(full_gt_data, "aux", None)
+        if aux is None or not hasattr(aux, "gt_depth_files"):
+            raise RuntimeError(f"Dataset '{data}' does not expose gt_depth_files for depth eval.")
+
+        depth_path = aux.gt_depth_files[img_idx]
+
+        if data == "7scenes":
+            raw = imageio.imread(depth_path).astype(np.float32)
+            invalid = raw == 65535
+            gt_depth = raw / 1000.0
+            gt_depth[invalid] = 0.0
+            valid = gt_depth > 0
+            return gt_depth.astype(np.float32), valid.astype(bool)
+
+        if data == "hiroom":
+            raw = imageio.imread(depth_path).astype(np.float32)
+            gt_depth = raw / 65535.0 * 100.0
+            valid = gt_depth > 0
+            if hasattr(aux, "aliasing_mask_files"):
+                alias_path = aux.aliasing_mask_files[img_idx]
+                if alias_path and os.path.exists(alias_path):
+                    alias = imageio.imread(alias_path)
+                    valid &= alias == 0
+            return gt_depth.astype(np.float32), valid.astype(bool)
+
+        if data == "scannetpp":
+            raw = imageio.imread(depth_path).astype(np.float32)
+            gt_depth = raw / 1000.0
+            valid = (gt_depth > 0) & np.isfinite(gt_depth)
+            return gt_depth.astype(np.float32), valid.astype(bool)
+
+        raw = imageio.imread(depth_path).astype(np.float32)
+        gt_depth = raw / 1000.0
+        valid = (gt_depth > 0) & np.isfinite(gt_depth)
+        return gt_depth.astype(np.float32), valid.astype(bool)
 
     def _sample_frames(self, scene_data: Dict, scene: str) -> Dict:
         """
@@ -749,4 +977,3 @@ Examples:
             if not is_worker:
                 metrics = evaluator.eval()
                 evaluator.print_metrics(metrics)
-
