@@ -7,7 +7,7 @@ name = "depth-anything-3"
 version = "0.0.0"
 description = "Depth Anything 3"
 readme = "README.md"
-requires-python = ">=3.9, <=3.13"
+requires-python = ">=3.10, <=3.13"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Your Name" }]
 
@@ -21,7 +21,7 @@ dependencies = [
     "imageio",
     "numpy<2",
     "opencv-python",
-    "xformers",
+    # "xformers", # Commented out to support macOS/MPS/CPU (xformers is CUDA-only)
     "open3d",
     "fastapi",
     "uvicorn",
@@ -43,8 +43,9 @@ dependencies = [
 
 [project.optional-dependencies]
 app = ["gradio>=5", "pillow>=9.0"] # requires that python3>=3.10
-gs = ["gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70"]
-all = ["depth-anything-3[app,gs]"]
+# Commented out to support macOS/MPS/CPU (gsplat requires CUDA compilation)
+# gs = ["gsplat @ git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70"]
+# all = ["depth-anything-3[app,gs]"]
 
 
 [project.scripts]
