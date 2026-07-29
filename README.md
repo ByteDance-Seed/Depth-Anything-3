@@ -221,7 +221,7 @@ The Nested series uses an Any-view model to estimate pose and depth, and a monoc
 | [DA3-LARGE-1.1](https://huggingface.co/depth-anything/DA3-LARGE-1.1)                     | 0.35B     | ✅             | ✅            | ✅             |       |               |           | CC BY-NC 4.0     |
 | [DA3-LARGE](https://huggingface.co/depth-anything/DA3-LARGE)                     | 0.35B     | ✅             | ✅            | ✅             |       |               |           | CC BY-NC 4.0     |
 | [DA3-BASE](https://huggingface.co/depth-anything/DA3-BASE)                     | 0.12B     | ✅             | ✅            | ✅             |       |               |           | Apache 2.0     |
-| [DA3-SMALL](https://huggingface.co/depth-anything/DA3-SMALL)                     | 0.08B     | ✅             | ✅            | ✅             |       |               |           | Apache 2.0     |
+| [DA3-SMALL](https://huggingface.co/depth-anything/DA3-SMALL)                     | 0.026B     | ✅             | ✅            | ✅             |       |               |           | Apache 2.0     |
 |                               |           |               |              |               |               |       |           |                |
 | **Monocular Metric Depth** | | | | | | | | |
 | [DA3METRIC-LARGE](https://huggingface.co/depth-anything/DA3METRIC-LARGE)              | 0.35B     | ✅             |              |               |       | ✅             | ✅         | Apache 2.0     |
