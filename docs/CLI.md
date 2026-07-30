@@ -69,9 +69,10 @@ da3 auto INPUT_PATH [OPTIONS]
 | `INPUT_PATH` | str | Required | Input path (image, directory, video, or COLMAP) |
 | `--model-dir` | str | Default model | Model directory path |
 | `--export-dir` | str | `debug` | Export directory |
-| `--export-format` | str | `glb` | Export format (supports `mini_npz`, `glb`, `feat_vis`, etc., can be combined with hyphens) |
+| `--export-format` | str | `glb` | Export format (`mini_npz`, `glb`, `feat_vis`, `colmap`, `gs_ply`, `gs_video`; can be combined with hyphens). `gs_ply` and `gs_video` require `--infer-gs` |
 | `--device` | str | `cuda` | Device to use |
 | `--use-backend` | bool | `False` | Use backend service for inference |
+| `--infer-gs` | bool | `False` | Run Gaussian splatting inference; required for `gs_ply` and `gs_video` exports |
 | `--backend-url` | str | `http://localhost:8008` | Backend service URL |
 | `--process-res` | int | `504` | Processing resolution |
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
@@ -123,9 +124,10 @@ da3 image IMAGE_PATH [OPTIONS]
 | `IMAGE_PATH` | str | Required | Input image file path |
 | `--model-dir` | str | Default model | Model directory path |
 | `--export-dir` | str | `debug` | Export directory |
-| `--export-format` | str | `glb` | Export format |
+| `--export-format` | str | `glb` | Export format (`mini_npz`, `glb`, `feat_vis`, `colmap`, `gs_ply`, `gs_video`; can be combined with hyphens). `gs_ply` and `gs_video` require `--infer-gs` |
 | `--device` | str | `cuda` | Device to use |
 | `--use-backend` | bool | `False` | Use backend service for inference |
+| `--infer-gs` | bool | `False` | Run Gaussian splatting inference; required for `gs_ply` and `gs_video` exports |
 | `--backend-url` | str | `http://localhost:8008` | Backend service URL |
 | `--process-res` | int | `504` | Processing resolution |
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
@@ -177,9 +179,10 @@ da3 images IMAGES_DIR [OPTIONS]
 | `--image-extensions` | str | `png,jpg,jpeg` | Image file extensions to process (comma-separated) |
 | `--model-dir` | str | Default model | Model directory path |
 | `--export-dir` | str | `debug` | Export directory |
-| `--export-format` | str | `glb` | Export format |
+| `--export-format` | str | `glb` | Export format (`mini_npz`, `glb`, `feat_vis`, `colmap`, `gs_ply`, `gs_video`; can be combined with hyphens). `gs_ply` and `gs_video` require `--infer-gs` |
 | `--device` | str | `cuda` | Device to use |
 | `--use-backend` | bool | `False` | Use backend service for inference |
+| `--infer-gs` | bool | `False` | Run Gaussian splatting inference; required for `gs_ply` and `gs_video` exports |
 | `--backend-url` | str | `http://localhost:8008` | Backend service URL |
 | `--process-res` | int | `504` | Processing resolution |
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
@@ -228,9 +231,10 @@ da3 video VIDEO_PATH [OPTIONS]
 | `--fps` | float | `1.0` | Frame extraction sampling FPS |
 | `--model-dir` | str | Default model | Model directory path |
 | `--export-dir` | str | `debug` | Export directory |
-| `--export-format` | str | `glb` | Export format |
+| `--export-format` | str | `glb` | Export format (`mini_npz`, `glb`, `feat_vis`, `colmap`, `gs_ply`, `gs_video`; can be combined with hyphens). `gs_ply` and `gs_video` require `--infer-gs` |
 | `--device` | str | `cuda` | Device to use |
 | `--use-backend` | bool | `False` | Use backend service for inference |
+| `--infer-gs` | bool | `False` | Run Gaussian splatting inference; required for `gs_ply` and `gs_video` exports |
 | `--backend-url` | str | `http://localhost:8008` | Backend service URL |
 | `--process-res` | int | `504` | Processing resolution |
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
@@ -283,9 +287,10 @@ da3 colmap COLMAP_DIR [OPTIONS]
 | `--align-to-input-ext-scale` | bool | `True` | Align prediction to input extrinsics scale |
 | `--model-dir` | str | Default model | Model directory path |
 | `--export-dir` | str | `debug` | Export directory |
-| `--export-format` | str | `glb` | Export format |
+| `--export-format` | str | `glb` | Export format (`mini_npz`, `glb`, `feat_vis`, `colmap`, `gs_ply`, `gs_video`; can be combined with hyphens). `gs_ply` and `gs_video` require `--infer-gs` |
 | `--device` | str | `cuda` | Device to use |
 | `--use-backend` | bool | `False` | Use backend service for inference |
+| `--infer-gs` | bool | `False` | Run Gaussian splatting inference; required for `gs_ply` and `gs_video` exports |
 | `--backend-url` | str | `http://localhost:8008` | Backend service URL |
 | `--process-res` | int | `504` | Processing resolution |
 | `--process-res-method` | str | `upper_bound_resize` | Processing resolution method |
@@ -494,7 +499,14 @@ da3 gallery --gallery-dir ./workspace --open-browser
   - 📦 `mini_npz`: Compressed NumPy format
   - 🎨 `glb`: glTF binary format (3D scene)
   - 🔍 `feat_vis`: Feature visualization
+  - 📐 `colmap`: COLMAP-format camera/depth outputs
+  - 🧊 `gs_ply`: Gaussian splatting PLY export; requires `infer_gs=True` (pass `--infer-gs`)
+  - 🎥 `gs_video`: Gaussian splatting video export; requires `infer_gs=True` (pass `--infer-gs`)
   - Example: `mini_npz-glb` exports both formats
+  - Example: `--export-format gs_ply --infer-gs` exports Gaussian splats
+
+- **`--infer-gs`**: Enable Gaussian splatting inference (sets `infer_gs=True`)
+  - Required when using `--export-format gs_ply` or `--export-format gs_video`
 
 - **`--process-res`** / **`--process-res-method`**: Control preprocessing resolution strategy
   - `process-res`: Target resolution (default 504)
@@ -583,6 +595,12 @@ da3 image image.jpg \
     --export-format feat_vis \
     --export-feat "9,19,29,39" \
     --export-dir ./results
+
+# 🧊 Export Gaussian splats and a GS video
+da3 auto path/to/images \
+    --infer-gs \
+    --export-format gs_ply-gs_video \
+    --export-dir ./workspace/gs_scene
 ```
 
 ### 4️⃣ Advanced Configuration
@@ -659,7 +677,8 @@ da3 auto video.mp4 \
 2. **💾 GPU Memory**: Be mindful of GPU memory usage when processing high-resolution inputs
 3. **📁 Export Directory**: Use `--auto-cleanup` to avoid manual confirmation for deletion
 4. **🔀 Format Combination**: Multiple export formats can be combined with hyphens (e.g., `mini_npz-glb-feat_vis`)
-5. **📐 COLMAP Data**: Ensure COLMAP directory structure is correct (contains `images/` and `sparse/` subdirectories)
+5. **🧊 Gaussian Splatting**: `--export-format gs_ply` and `--export-format gs_video` require `--infer-gs` (`infer_gs=True`)
+6. **📐 COLMAP Data**: Ensure COLMAP directory structure is correct (contains `images/` and `sparse/` subdirectories)
 
 ---
 

@@ -59,6 +59,7 @@ class InferenceService:
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
         feat_vis_fps: int = 15,
+        infer_gs: bool = False,
     ) -> Any:
         """Run local inference"""
         if export_feat_layers is None:
@@ -81,6 +82,7 @@ class InferenceService:
             "num_max_points": num_max_points,
             "show_cameras": show_cameras,
             "feat_vis_fps": feat_vis_fps,
+            "infer_gs": infer_gs,
         }
 
         # Add pose data (if exists)
@@ -116,6 +118,7 @@ class InferenceService:
         num_max_points: int = 1_000_000,
         show_cameras: bool = True,
         feat_vis_fps: int = 15,
+        infer_gs: bool = False,
     ) -> Dict[str, Any]:
         """Run backend inference"""
         if export_feat_layers is None:
@@ -140,6 +143,7 @@ class InferenceService:
             "num_max_points": num_max_points,
             "show_cameras": show_cameras,
             "feat_vis_fps": feat_vis_fps,
+            "infer_gs": infer_gs,
         }
 
         # Add pose data (if exists)
@@ -203,6 +207,7 @@ def run_inference(
     num_max_points: int = 1_000_000,
     show_cameras: bool = True,
     feat_vis_fps: int = 15,
+    infer_gs: bool = False,
 ) -> Union[Any, Dict[str, Any]]:
     """Unified inference interface"""
 
@@ -226,6 +231,7 @@ def run_inference(
             num_max_points=num_max_points,
             show_cameras=show_cameras,
             feat_vis_fps=feat_vis_fps,
+            infer_gs=infer_gs,
         )
     else:
         return service.run_local_inference(
@@ -244,4 +250,5 @@ def run_inference(
             num_max_points=num_max_points,
             show_cameras=show_cameras,
             feat_vis_fps=feat_vis_fps,
+            infer_gs=infer_gs,
         )

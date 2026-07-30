@@ -118,6 +118,9 @@ def auto(
     export_format: str = typer.Option("glb", help="Export format"),
     device: str = typer.Option("cuda", help="Device to use"),
     use_backend: bool = typer.Option(False, help="Use backend service for inference"),
+    infer_gs: bool = typer.Option(
+        False, "--infer-gs", help="Run Gaussian splatting inference"
+    ),
     backend_url: str = typer.Option(
         "http://localhost:8008", help="Backend URL (default: http://localhost:8008)"
     ),
@@ -215,6 +218,7 @@ def auto(
             process_res_method=process_res_method,
             export_feat_layers=export_feat_layers,
             use_ray_pose=use_ray_pose,
+            infer_gs=infer_gs,
             ref_view_strategy=ref_view_strategy,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
@@ -242,6 +246,7 @@ def auto(
             process_res_method=process_res_method,
             export_feat_layers=export_feat_layers,
             use_ray_pose=use_ray_pose,
+            infer_gs=infer_gs,
             ref_view_strategy=ref_view_strategy,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
@@ -269,6 +274,7 @@ def auto(
             process_res_method=process_res_method,
             export_feat_layers=export_feat_layers,
             use_ray_pose=use_ray_pose,
+            infer_gs=infer_gs,
             ref_view_strategy=ref_view_strategy,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
@@ -301,6 +307,7 @@ def auto(
             intrinsics=intrinsics,
             align_to_input_ext_scale=align_to_input_ext_scale,
             use_ray_pose=use_ray_pose,
+            infer_gs=infer_gs,
             ref_view_strategy=ref_view_strategy,
             conf_thresh_percentile=conf_thresh_percentile,
             num_max_points=num_max_points,
@@ -320,6 +327,9 @@ def image(
     export_format: str = typer.Option("glb", help="Export format"),
     device: str = typer.Option("cuda", help="Device to use"),
     use_backend: bool = typer.Option(False, help="Use backend service for inference"),
+    infer_gs: bool = typer.Option(
+        False, "--infer-gs", help="Run Gaussian splatting inference"
+    ),
     backend_url: str = typer.Option(
         "http://localhost:8008", help="Backend URL (default: http://localhost:8008)"
     ),
@@ -380,7 +390,8 @@ def image(
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        infer_gs=infer_gs,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -399,6 +410,9 @@ def images(
     export_format: str = typer.Option("glb", help="Export format"),
     device: str = typer.Option("cuda", help="Device to use"),
     use_backend: bool = typer.Option(False, help="Use backend service for inference"),
+    infer_gs: bool = typer.Option(
+        False, "--infer-gs", help="Run Gaussian splatting inference"
+    ),
     backend_url: str = typer.Option(
         "http://localhost:8008", help="Backend URL (default: http://localhost:8008)"
     ),
@@ -459,7 +473,8 @@ def images(
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        infer_gs=infer_gs,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -483,6 +498,9 @@ def colmap(
     export_format: str = typer.Option("glb", help="Export format"),
     device: str = typer.Option("cuda", help="Device to use"),
     use_backend: bool = typer.Option(False, help="Use backend service for inference"),
+    infer_gs: bool = typer.Option(
+        False, "--infer-gs", help="Run Gaussian splatting inference"
+    ),
     backend_url: str = typer.Option(
         "http://localhost:8008", help="Backend URL (default: http://localhost:8008)"
     ),
@@ -546,7 +564,8 @@ def colmap(
         intrinsics=intrinsics,
         align_to_input_ext_scale=align_to_input_ext_scale,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        infer_gs=infer_gs,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
@@ -563,6 +582,9 @@ def video(
     export_format: str = typer.Option("glb", help="Export format"),
     device: str = typer.Option("cuda", help="Device to use"),
     use_backend: bool = typer.Option(False, help="Use backend service for inference"),
+    infer_gs: bool = typer.Option(
+        False, "--infer-gs", help="Run Gaussian splatting inference"
+    ),
     backend_url: str = typer.Option(
         "http://localhost:8008", help="Backend URL (default: http://localhost:8008)"
     ),
@@ -623,7 +645,8 @@ def video(
         process_res_method=process_res_method,
         export_feat_layers=export_feat_layers,
         use_ray_pose=use_ray_pose,
-        reference_view_strategy=reference_view_strategy,
+        infer_gs=infer_gs,
+        ref_view_strategy=ref_view_strategy,
         conf_thresh_percentile=conf_thresh_percentile,
         num_max_points=num_max_points,
         show_cameras=show_cameras,
