@@ -34,3 +34,16 @@ src/debug_main.py
 src/outputs
 temp*.png
 /outputs
+
+*.zip
+
+# Training artifacts
+checkpoints/
+wandb/
+finetune_cache/
+logs/
+
+# Training data
+drone_v59_depth/
+datasets/
+.venv/
