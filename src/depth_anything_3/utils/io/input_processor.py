@@ -99,13 +99,16 @@ class InputProcessor:
         proc_imgs, out_sizes, out_ixts = self._unify_batch_shapes(proc_imgs, out_sizes, out_ixts)
 
         batch_tensor = self._stack_batch(proc_imgs)
+
+        # Zero-copy conversion: torch.from_numpy shares memory with numpy array
+        # Only works when array is C-contiguous (which np.asarray ensures)
         out_exts = (
-            torch.from_numpy(np.asarray(out_exts)).float()
+            torch.from_numpy(np.ascontiguousarray(np.asarray(out_exts))).float()
             if out_exts is not None and out_exts[0] is not None
             else None
         )
         out_ixts = (
-            torch.from_numpy(np.asarray(out_ixts)).float()
+            torch.from_numpy(np.ascontiguousarray(np.asarray(out_ixts))).float()
             if out_ixts is not None and out_ixts[0] is not None
             else None
         )

@@ -34,3 +34,4 @@ src/debug_main.py
 src/outputs
 temp*.png
 /outputs
+.idea
