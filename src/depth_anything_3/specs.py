@@ -35,6 +35,7 @@ class Gaussians:
 class Prediction:
     depth: np.ndarray  # N, H, W
     is_metric: int
+    alpha_masks: np.ndarray | None = None  # N, H, W - alpha mask in 0-1 range
     sky: np.ndarray | None = None  # N, H, W
     conf: np.ndarray | None = None  # N, H, W
     extrinsics: np.ndarray | None = None  # N, 4, 4
