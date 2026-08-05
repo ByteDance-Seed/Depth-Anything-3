@@ -15,6 +15,7 @@
 import os
 from typing import Literal, Optional
 import moviepy.editor as mpy
+from moviepy.video.io.ffmpeg_writer import ffmpeg_write_video
 import torch
 
 from depth_anything_3.model.utils.gs_renderer import run_renderer_in_chunk_w_trj_mode
@@ -119,11 +120,10 @@ def export_to_gs_video(
     )
 
     # save as video
+    preset = VIDEO_QUALITY_MAP[video_quality]["preset"]
     ffmpeg_params = [
         "-crf",
         VIDEO_QUALITY_MAP[video_quality]["crf"],
-        "-preset",
-        VIDEO_QUALITY_MAP[video_quality]["preset"],
         "-pix_fmt",
         "yuv420p",
     ]  # best compatibility
@@ -144,11 +144,14 @@ def export_to_gs_video(
         output_name = f"{idx:04d}_{trj_mode}" if output_name is None else output_name
         save_path = os.path.join(export_dir, f"gs_video/{output_name}.mp4")
         # clip.write_videofile(save_path, codec="libx264", audio=False, bitrate="4000k")
-        clip.write_videofile(
-            save_path,
-            codec="libx264",
-            audio=False,
+        ffmpeg_write_video(
+            clip,
+            filename=save_path,
             fps=fps,
+            codec="libx264",
+            preset=preset,
+            audiofile=None,
             ffmpeg_params=ffmpeg_params,
+            logger="bar",
         )
     return
