@@ -372,7 +372,20 @@ HTML_PAGE = r"""<!doctype html>
     .viewer-header{ position:absolute; top:8px; left:8px; right:8px; display:flex; gap:8px; align-items:center; z-index:2; }
     .viewer-body{ height:100%; display:grid; grid-template-rows:auto auto; gap:12px; padding:36px 8px 8px 8px; overflow:auto; }
     .res-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-    .res-img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
+    .res-img{ max-width:100%; max-height:100%; object-fit:contain; display:block; cursor:zoom-in; }
+    .res-cell:has(.res-img){ cursor:zoom-in; transition:border-color .2s ease, transform .2s ease; }
+    .res-cell:has(.res-img):hover{ border-color:var(--tech-blue); transform:translateY(-1px); }
+    .image-overlay{ position:fixed; inset:0; z-index:30; display:none; place-items:center; background:rgba(0,0,0,.9); padding:24px; }
+    .image-overlay.show{ display:grid; }
+    .image-stage{ position:relative; width:min(96vw,1600px); height:min(92vh,1100px); display:grid; place-items:center; }
+    .image-stage img{ max-width:100%; max-height:100%; object-fit:contain; border-radius:10px; box-shadow:0 18px 60px rgba(0,0,0,.5); }
+    .image-close,.image-nav{ position:absolute; z-index:2; border:1px solid rgba(0,212,255,.45); background:rgba(5,10,18,.8); color:#fff; cursor:pointer; display:grid; place-items:center; }
+    .image-close{ top:8px; right:8px; width:44px; height:44px; border-radius:50%; font-size:26px; }
+    .image-nav{ top:50%; translate:0 -50%; width:48px; height:64px; border-radius:12px; font-size:28px; }
+    .image-prev{ left:8px; }
+    .image-next{ right:8px; }
+    .image-nav:disabled{ opacity:.25; cursor:default; }
+    .image-caption{ position:absolute; left:50%; bottom:8px; translate:-50% 0; padding:7px 12px; border-radius:10px; background:rgba(5,10,18,.78); color:#fff; font-size:13px; white-space:nowrap; }
     .download-icon{ position:absolute; bottom:16px; right:16px; width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:20px; cursor:pointer; z-index:3; transition:all 0.3s ease; }
 
     /* Pagination controls */
@@ -547,11 +560,21 @@ HTML_PAGE = r"""<!doctype html>
     </div>
   </div>
 
+  <div id="imageOverlay" class="image-overlay" role="dialog" aria-modal="true" aria-label="Expanded depth image">
+    <div class="image-stage">
+      <button id="imageClose" class="image-close" aria-label="Close expanded image">×</button>
+      <button id="imagePrev" class="image-nav image-prev" aria-label="Previous image">‹</button>
+      <img id="expandedImage" src="" alt="" />
+      <button id="imageNext" class="image-nav image-next" aria-label="Next image">›</button>
+      <div id="imageCaption" class="image-caption"></div>
+    </div>
+  </div>
+
   <footer>Depth Anything 3 Gallery. Copyright 2025 Depth Anything 3 authors.</footer>
 
 <script>
-const level1=document.getElementById('level1'),level2=document.getElementById('level2'),pageTitle=document.getElementById('pageTitle'),crumb=document.getElementById('crumb'),backBtn=document.getElementById('backBtn'),hint=document.getElementById('hint'),searchInput=document.getElementById('search'),groupList=document.getElementById('groupList'),groupEmpty=document.getElementById('groupEmpty'),topPager=document.getElementById('topPager'),grid=document.getElementById('grid'),sceneEmpty=document.getElementById('sceneEmpty'),overlay=document.getElementById('overlay'),viewer=document.getElementById('viewer'),mv=document.getElementById('mv'),viewerTitle=document.getElementById('viewerTitle'),downloadBtn=document.getElementById('downloadBtn'),toggleViewBtn=document.getElementById('toggleView'),closeBtn=document.getElementById('closeBtn'),resGrid=document.getElementById('resGrid');
-let GROUPS=[],SCENES=[],currentGroup=null,currentScene=null,currentPage=1,currentScenePage=1;
+const level1=document.getElementById('level1'),level2=document.getElementById('level2'),pageTitle=document.getElementById('pageTitle'),crumb=document.getElementById('crumb'),backBtn=document.getElementById('backBtn'),hint=document.getElementById('hint'),searchInput=document.getElementById('search'),groupList=document.getElementById('groupList'),groupEmpty=document.getElementById('groupEmpty'),topPager=document.getElementById('topPager'),grid=document.getElementById('grid'),sceneEmpty=document.getElementById('sceneEmpty'),overlay=document.getElementById('overlay'),viewer=document.getElementById('viewer'),mv=document.getElementById('mv'),viewerTitle=document.getElementById('viewerTitle'),downloadBtn=document.getElementById('downloadBtn'),toggleViewBtn=document.getElementById('toggleView'),closeBtn=document.getElementById('closeBtn'),resGrid=document.getElementById('resGrid'),imageOverlay=document.getElementById('imageOverlay'),expandedImage=document.getElementById('expandedImage'),imageCaption=document.getElementById('imageCaption'),imageClose=document.getElementById('imageClose'),imagePrev=document.getElementById('imagePrev'),imageNext=document.getElementById('imageNext');
+let GROUPS=[],SCENES=[],currentGroup=null,currentScene=null,currentPage=1,currentScenePage=1,expandedImages=[],expandedIndex=0;
 
 const qs=()=>new URLSearchParams(location.search);
 async function loadGroups(){const r=await fetch('/manifest.json',{cache:'no-store'});if(!r.ok)throw new Error(r.status+' '+r.statusText);const j=await r.json();GROUPS=j.groups||[];renderGroups(GROUPS);}
@@ -578,6 +601,7 @@ function buildResGrid(i,page=1){
       im.src=subset[k];
       im.alt=(i.title||'scene')+' depth '+(k+1+(page-1)*perPage);
       im.loading='lazy';
+      im.onclick=()=>openExpandedImage(i,k+(page-1)*perPage);
       cell.appendChild(im);
     } else {
       const ph=document.createElement('div');
@@ -610,10 +634,16 @@ function buildResGrid(i,page=1){
   pager.appendChild(next);
   resGrid.appendChild(pager);
 }
+function openExpandedImage(i,index){expandedImages=i.depth_images||[];expandedIndex=index;renderExpandedImage();imageOverlay.classList.add('show');imageClose.focus();}
+function renderExpandedImage(){const src=expandedImages[expandedIndex];if(!src)return;expandedImage.src=src;expandedImage.alt=(currentScene?.title||'scene')+' depth '+(expandedIndex+1);imageCaption.textContent=`${currentScene?.title||'Scene'} · ${expandedIndex+1} / ${expandedImages.length}`;imagePrev.disabled=expandedIndex<=0;imageNext.disabled=expandedIndex>=expandedImages.length-1;}
+function stepExpandedImage(delta){const next=expandedIndex+delta;if(next<0||next>=expandedImages.length)return;expandedIndex=next;renderExpandedImage();}
+function closeExpandedImage(){imageOverlay.classList.remove('show');expandedImage.src='';}
 function openViewer(i,{push=false}={}){currentScene=i;viewerTitle.textContent=i.title;mv.src=i.model;overlay.classList.add('show');resGrid.hidden=true;toggleViewBtn.textContent='Resource View';viewer.style.blockSize='min(82vh,var(--maxH))';buildResGrid(i,1);downloadBtn.onclick=()=>{const a=document.createElement('a');a.href=i.model;a.download=i.title+'.glb';a.click();};if(push){const u=new URL(location.href);if(!u.searchParams.get('group'))u.searchParams.set('group',currentGroup||'');u.searchParams.set('id',i.id);history.pushState(null,'',u);}}
 function toggleView(){const hidden=!resGrid.hidden;resGrid.hidden=hidden;toggleViewBtn.textContent=hidden?'Resource View':'3D Only';viewer.style.blockSize=hidden?'min(82vh,var(--maxH))':'min(92vh,900px)';}
 function closeViewer(){const hasId=!!qs().get('id');if(hasId&&history.length>1){history.back();return;}const u=new URL(location.href);u.searchParams.delete('id');history.replaceState(null,'',u);overlay.classList.remove('show');mv.src='';}
 overlay.onclick=e=>{if(e.target===overlay)closeViewer();};closeBtn.onclick=closeViewer;toggleViewBtn.onclick=toggleView;backBtn.onclick=()=>history.back();
+imageOverlay.onclick=e=>{if(e.target===imageOverlay)closeExpandedImage();};imageClose.onclick=closeExpandedImage;imagePrev.onclick=()=>stepExpandedImage(-1);imageNext.onclick=()=>stepExpandedImage(1);
+document.addEventListener('keydown',e=>{if(!imageOverlay.classList.contains('show'))return;if(e.key==='Escape')closeExpandedImage();else if(e.key==='ArrowLeft')stepExpandedImage(-1);else if(e.key==='ArrowRight')stepExpandedImage(1);});
 searchInput.oninput=()=>{!qs().get('group')?renderGroups(GROUPS):renderScenes(SCENES,1);};
 window.onpopstate=()=>routeFromURL();
 async function routeFromURL(){if(location.pathname!="/")history.replaceState(null,'','/'+location.search);const g=qs().get('group');const id=qs().get('id');if(!g){enterLevel1({push:false});return;}await enterLevel2(g,{push:false});if(id){const hit=SCENES.find(x=>x.id===id);if(hit)openViewer(hit,{push:false});else{overlay.classList.remove('show');mv.src='';}}else{overlay.classList.remove('show');mv.src='';}}
