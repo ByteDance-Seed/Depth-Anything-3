@@ -372,6 +372,7 @@ HTML_PAGE = r"""<!doctype html>
     .viewer-header{ position:absolute; top:8px; left:8px; right:8px; display:flex; gap:8px; align-items:center; z-index:2; }
     .viewer-body{ height:100%; display:grid; grid-template-rows:auto auto; gap:12px; padding:36px 8px 8px 8px; overflow:auto; }
     .res-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .res-grid[hidden]{ display:none !important; }
     .res-img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
     .download-icon{ position:absolute; bottom:16px; right:16px; width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:20px; cursor:pointer; z-index:3; transition:all 0.3s ease; }
 
