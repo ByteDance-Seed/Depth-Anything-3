@@ -543,6 +543,17 @@ def _is_plain_name(name: str) -> bool:
     return all(c not in name for c in ("/", "\\")) and name not in (".", "..")
 
 
+def _is_within_directory(path: str, directory: str) -> bool:
+    """Check whether ``path`` is ``directory`` itself or lives inside it.
+
+    Both arguments are expected to be already resolved with ``os.path.realpath``.
+    Comparing against ``directory`` with a trailing separator avoids the prefix
+    pitfall where a sibling such as ``/data/gallery_private`` would otherwise look
+    like it is inside ``/data/gallery``.
+    """
+    return path == directory or path.startswith(os.path.join(directory, ""))
+
+
 def build_group_list(root_dir: str) -> dict:
     """Build list of groups from gallery directory."""
     groups = []
@@ -652,7 +663,7 @@ def validate_export_dir(export_dir: Optional[str], gallery_dir: Optional[str]) -
 
     gallery_root = os.path.realpath(gallery_dir)
     resolved = os.path.realpath(export_dir)
-    if resolved != gallery_root and not resolved.startswith(gallery_root + os.sep):
+    if not _is_within_directory(resolved, gallery_root):
         raise ValueError(
             "export_dir must resolve within the server's configured gallery directory"
         )
@@ -1453,7 +1464,7 @@ def create_app(
             # Ensure the file is within gallery directory
             real_file_path = os.path.realpath(file_path)
             real_gallery_dir = os.path.realpath(_gallery_dir)
-            if not real_file_path.startswith(real_gallery_dir):
+            if not _is_within_directory(real_file_path, real_gallery_dir):
                 raise HTTPException(status_code=403, detail="Access denied")
 
             if not os.path.exists(file_path) or not os.path.isfile(file_path):
