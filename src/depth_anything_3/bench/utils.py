@@ -471,9 +471,9 @@ def se3_to_relative_pose_error(
     """
     pair_idx_i1, pair_idx_i2 = build_pair_index(num_frames)
 
-    # Compute relative camera poses between pairs using closed-form inverse
-    relative_pose_gt = closed_form_inverse_se3(gt_se3[pair_idx_i1]).bmm(gt_se3[pair_idx_i2])
-    relative_pose_pred = closed_form_inverse_se3(pred_se3[pair_idx_i1]).bmm(pred_se3[pair_idx_i2])
+    # Compute relative camera poses (cam_i1 -> cam_i2) for w2c SE(3) matrices
+    relative_pose_gt = gt_se3[pair_idx_i2].bmm(closed_form_inverse_se3(gt_se3[pair_idx_i1]))
+    relative_pose_pred = pred_se3[pair_idx_i2].bmm(closed_form_inverse_se3(pred_se3[pair_idx_i1]))
 
     # Compute the difference in rotation and translation
     rel_rangle_deg = rotation_angle(relative_pose_gt[:, :3, :3], relative_pose_pred[:, :3, :3])
